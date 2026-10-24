@@ -1,0 +1,294 @@
+// Geist (OFL-1.1, assets/fonts/OFL.txt), embedded so text matches vaexil.tv.
+import "../../../assets/fonts/Geist-Regular.ttf";
+import "../../../assets/fonts/Geist-SemiBold.ttf";
+import "../../../assets/fonts/Geist-Bold.ttf";
+import "../../../assets/fonts/GeistMono-Regular.ttf";
+import { Palette, ScrollView } from "std-widgets.slint";
+import { Button, Theme } from "theme.slint";
+
+export struct DeviceRow {
+    name: string,
+    product: string,
+    meta: string,
+    zones: string,
+    note: string,
+    // False when every light on the device is off; the swatch is then hollow.
+    lit: bool,
+    swatch: color,
+}
+
+export global Ui {
+    in property <string> version;
+    // "devices" or "message"
+    in property <string> screen: "message";
+    in property <string> chip: "Connecting…";
+    in property <bool> chip-warn;
+    in property <string> heading: "Looking for OpenRGB";
+    in property <string> message;
+    in property <string> summary;
+    in property <[DeviceRow]> devices;
+}
+
+component Chip inherits Rectangle {
+    in property <string> text;
+    in property <bool> warn;
+    height: 28px;
+    min-width: label.preferred-width + 24px;
+    horizontal-stretch: 0;
+    border-radius: self.height / 2;
+    background: (warn ? Theme.warning : Theme.ready).transparentize(86%);
+    border-width: 1px;
+    border-color: (warn ? Theme.warning : Theme.ready).transparentize(50%);
+    label := Text {
+        text: root.text;
+        font-size: 12px;
+        font-weight: 600;
+        color: root.warn ? Theme.warning : Theme.ready;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// The color most of a device's lights show, as a disc. Off is a hollow ring.
+component Swatch inherits Rectangle {
+    in property <bool> lit;
+    in property <color> fill;
+    width: 28px;
+    height: 28px;
+    border-radius: self.width / 2;
+    background: root.lit ? root.fill : transparent;
+    border-width: root.lit ? 1px : 2px;
+    border-color: root.lit ? Theme.surface-border : Theme.secondary-text.transparentize(40%);
+    accessible-role: none;
+}
+
+component DeviceRowView inherits Rectangle {
+    in property <DeviceRow> item;
+    min-height: content.preferred-height;
+    border-radius: Theme.control-radius;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.surface-border;
+    accessible-role: list-item;
+    accessible-label: root.item.name + ", " + root.item.product + ", " + root.item.meta
+        + (root.item.lit ? "" : ", all lights off")
+        + (root.item.note != "" ? ". " + root.item.note : "");
+
+    content := HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 16px;
+        VerticalLayout {
+            alignment: center;
+            Swatch {
+                lit: root.item.lit;
+                fill: root.item.swatch;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: root.item.name;
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.text;
+                    overflow: elide;
+                    horizontal-stretch: 0;
+                    accessible-role: none;
+                }
+                Text {
+                    text: root.item.product;
+                    font-size: 12px;
+                    color: Theme.secondary-text;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    accessible-role: none;
+                }
+            }
+            Text {
+                text: root.item.meta;
+                font-size: 12px;
+                font-family: Theme.font-mono;
+                color: Theme.secondary-text;
+                overflow: elide;
+                accessible-role: none;
+            }
+            if root.item.zones != "": Text {
+                text: root.item.zones;
+                font-size: 12px;
+                color: Theme.secondary-text;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+            if root.item.note != "": Text {
+                text: root.item.note;
+                font-size: 12px;
+                color: Theme.warning;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Keeplight";
+    icon: @image-url("../../../assets/icon-256.png");
+    preferred-width: 860px;
+    preferred-height: 720px;
+    min-width: 420px;
+    min-height: 480px;
+    background: Theme.window-background;
+    default-font-size: 13px;
+    default-font-family: Theme.font-sans;
+
+    // Dark by default (owner decision 2026-10-24). The setting to follow
+    // Windows or use light comes with the settings screen.
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
+    property <length> gutter: 24px;
+
+    // After a restore from minimized, the software renderer's partial repaint
+    // left everything outside changed items unpainted. Flipping this flag
+    // (from Rust) changes the full-window rectangle's colour by one step,
+    // which marks the whole window dirty and repaints all of it.
+    in property <bool> repaint-flip;
+    Rectangle {
+        background: root.repaint-flip ? Theme.window-background-alt : Theme.window-background;
+        accessible-role: none;
+    }
+
+    VerticalLayout {
+        HorizontalLayout {
+            padding: gutter;
+            padding-top: 22px;
+            padding-bottom: 14px;
+            spacing: 16px;
+            VerticalLayout {
+                alignment: center;
+                spacing: 3px;
+                horizontal-stretch: 1;
+                Text {
+                    text: "Your lights";
+                    font-size: 26px;
+                    font-weight: 700;
+                    color: Theme.text;
+                    wrap: word-wrap;
+                }
+                if Ui.summary != "": Text {
+                    text: Ui.summary;
+                    font-size: 12px;
+                    color: Theme.secondary-text;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Chip {
+                    text: Ui.chip;
+                    warn: Ui.chip-warn;
+                }
+            }
+        }
+
+        if Ui.screen == "devices": list := ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                width: list.visible-width;
+                // Rows keep their own height when there are only a few.
+                alignment: start;
+                padding-left: gutter;
+                padding-right: gutter;
+                padding-bottom: gutter;
+                spacing: 8px;
+                for d in Ui.devices: DeviceRowView { item: d; }
+            }
+        }
+
+        if Ui.screen == "message": VerticalLayout {
+            vertical-stretch: 1;
+            padding: gutter * 2;
+            alignment: center;
+            spacing: 12px;
+            Text {
+                text: Ui.heading;
+                font-size: 22px;
+                font-weight: 700;
+                color: Theme.text;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+            Text {
+                text: Ui.message;
+                color: Theme.secondary-text;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: gutter;
+            padding-right: gutter;
+            padding-top: 8px;
+            padding-bottom: 12px;
+            Text {
+                text: "Read-only for now: Keeplight has not changed any light. Version " + Ui.version + ".";
+                font-size: 11px;
+                color: Theme.secondary-text;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+/// A plain message for errors before the main window exists.
+export component MessageWindow inherits Window {
+    in property <string> heading;
+    in property <string> message;
+    callback ok();
+
+    title: "Keeplight";
+    icon: @image-url("../../../assets/icon-256.png");
+    width: 440px;
+    background: Theme.surface;
+    default-font-size: 13px;
+    default-font-family: Theme.font-sans;
+    forward-focus: ok-button;
+
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
+    VerticalLayout {
+        padding: 22px;
+        spacing: 12px;
+        Text {
+            text: root.heading;
+            font-size: 18px;
+            font-weight: 700;
+            color: Theme.text;
+            wrap: word-wrap;
+        }
+        Text {
+            text: root.message;
+            color: Theme.text;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: end;
+            ok-button := Button {
+                text: "OK";
+                primary: true;
+                clicked => { root.ok(); }
+            }
+        }
+    }
+}

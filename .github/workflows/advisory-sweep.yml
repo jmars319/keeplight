@@ -1,0 +1,26 @@
+name: Advisory Sweep
+
+# CI only checks dependencies when code changes. This weekly run catches an
+# advisory published against code that has not been touched.
+
+on:
+  schedule:
+    - cron: '37 13 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    name: cargo-deny advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: cargo-deny advisories
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories

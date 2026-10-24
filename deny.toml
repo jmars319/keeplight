@@ -1,0 +1,52 @@
+[graph]
+targets = ["x86_64-pc-windows-msvc"]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "GPL-3.0-only",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+# No HTTP or TLS crates. Keeplight's only connection is to OpenRGB on
+# 127.0.0.1, over a plain TCP socket from the standard library.
+# No async runtime either: the OpenRGB client is synchronous on purpose.
+deny = [
+    { crate = "reqwest" },
+    { crate = "hyper" },
+    { crate = "ureq" },
+    { crate = "curl" },
+    { crate = "isahc" },
+    { crate = "openssl" },
+    { crate = "native-tls" },
+    { crate = "rustls" },
+    { crate = "tokio" },
+    # openrgb2 is GPL-2.0-only, which cannot be combined with this
+    # GPL-3.0-only app, and openrgb is its unmaintained predecessor
+    # (docs/adr/0001-build-on-openrgb.md).
+    { crate = "openrgb2" },
+    { crate = "openrgb" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
