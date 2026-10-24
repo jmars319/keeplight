@@ -1,5 +1,8 @@
 # Draws the app icon (a lit LED with a halo, above a strip of three LEDs) and
-# writes assets/icon-256.png plus a multi-size assets/app.ico. Windows only.
+# writes assets/icon-256.png, assets/icon-1024.png and a multi-size
+# assets/app.ico. Windows only.
+# assets/icon.svg is the same drawing as a vector source, for any size and for
+# brand use; change both together.
 # Same Vaexil canvas as Modlist Launcher's icon, with its own symbol, so the
 # apps stay distinct in the taskbar.
 $ErrorActionPreference = 'Stop'
@@ -72,6 +75,12 @@ foreach ($size in $sizes) {
     $bmp.Dispose()
 }
 
+# The largest size, for brand use. Not part of the .ico, whose largest entry
+# Windows uses is 256 px.
+$big = Draw-Icon 1024
+$big.Save((Join-Path $assets 'icon-1024.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+$big.Dispose()
+
 # ICO container with PNG-compressed entries.
 $out = New-Object System.IO.MemoryStream
 $w = New-Object System.IO.BinaryWriter $out
@@ -87,4 +96,4 @@ foreach ($size in $sizes) {
 foreach ($size in $sizes) { $w.Write($pngs[$size]) }
 $w.Flush()
 [System.IO.File]::WriteAllBytes((Join-Path $assets 'app.ico'), $out.ToArray())
-Write-Output "Wrote $assets\icon-256.png and app.ico"
+Write-Output "Wrote $assets\icon-256.png, icon-1024.png and app.ico"

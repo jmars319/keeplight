@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Keeplight's icon as a vector source: the drawing scripts/generate-icon.ps1 makes, with the same 256-unit geometry and colours. Change both together. -->
+  <defs>
+    <linearGradient id="tile" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="256" y2="256">
+      <stop offset="0" stop-color="#0b1628"/>
+      <stop offset="1" stop-color="#05070d"/>
+    </linearGradient>
+    <linearGradient id="edge" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="256" y2="256">
+      <stop offset="0" stop-color="#2f7bff"/>
+      <stop offset="1" stop-color="#ff3fd8"/>
+    </linearGradient>
+    <linearGradient id="core" gradientUnits="userSpaceOnUse" x1="96" y1="72" x2="160" y2="136">
+      <stop offset="0" stop-color="#2f7bff"/>
+      <stop offset="1" stop-color="#ff3fd8"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#tile)" stroke="url(#edge)" stroke-width="5"/>
+  <circle cx="128" cy="104" r="66" fill="#67e8f9" fill-opacity="0.156863"/>
+  <circle cx="128" cy="104" r="48" fill="#67e8f9" fill-opacity="0.313725"/>
+  <circle cx="128" cy="104" r="32" fill="url(#core)"/>
+  <circle cx="118" cy="94" r="9" fill="#f8fafc" fill-opacity="0.901961"/>
+  <rect x="52" y="186" width="152" height="30" rx="15" fill="#151e2e"/>
+  <circle cx="84" cy="201" r="8" fill="#67e8f9" fill-opacity="0.588235"/>
+  <circle cx="128" cy="201" r="8" fill="#67e8f9"/>
+  <circle cx="172" cy="201" r="8" fill="#67e8f9" fill-opacity="0.588235"/>
+</svg>
