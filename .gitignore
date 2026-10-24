@@ -1,0 +1,10 @@
+/target/
+/dist/
+/packaging/output/
+*.pdb
+*.log
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
