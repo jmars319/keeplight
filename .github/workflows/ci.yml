@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Lint, test, and build
+    # GitHub-hosted, like Modlist Launcher and Vaexil Mod Manager. This
+    # repository is private, so these minutes count against the account.
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Release build
+        run: cargo build --release --locked -p keeplight
+
+      - name: Report binary size
+        shell: pwsh
+        run: |
+          $exe = Get-Item target/release/keeplight.exe
+          "keeplight.exe: {0:N1} MB" -f ($exe.Length / 1MB) | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+  security:
+    name: Dependency policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: cargo-deny (advisories, licenses, bans, sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
