@@ -21,4 +21,4 @@ JAMARQ's Windows-native desktop apps are Rust and Slint (agentic-instructions AD
 
 - One shared look and one way of working across the Windows apps.
 - When the theme changes in Modlist Launcher, copy the file again; do not edit it here.
-- The repository is private, unlike its two siblings, so CI on GitHub-hosted runners counts against the account's Actions minutes. Windows minutes count double.
+- The repository is public like its two siblings, so CI runs on GitHub-hosted runners at no cost, and never on self-hosted ones. It started private on 2026-10-24 and was made public the same day, once a check found nothing in it that needed hiding.

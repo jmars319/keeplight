@@ -15,8 +15,8 @@ concurrency:
 jobs:
   build:
     name: Lint, test, and build
-    # GitHub-hosted, like Modlist Launcher and Vaexil Mod Manager. This
-    # repository is private, so these minutes count against the account.
+    # GitHub-hosted on purpose: this repository is public, and self-hosted
+    # runners must not run code from pull requests.
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
