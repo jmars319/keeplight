@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in Keeplight does not work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. If the problem could harm someone's PC or hardware, or Keeplight changed a light you did not set, report it privately instead: **Security > Report a vulnerability**.
+
+        If the problem is in OpenRGB itself, for example a device that misbehaves the same way when set from OpenRGB's own window, report it to [OpenRGB](https://gitlab.com/CalcProgrammer1/OpenRGB) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. A screenshot of the window helps.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start OpenRGB...
+        2. Open Keeplight...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Keeplight version
+      description: Shown at the bottom of the window.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: openrgb-version
+    attributes:
+      label: OpenRGB version, and how it runs
+      description: Help > About in OpenRGB, and whether it runs as the background service or as a window.
+      placeholder: 1.0, background service
+    validations:
+      required: true
+  - type: textarea
+    id: devices
+    attributes:
+      label: The device involved
+      description: Its row from Keeplight's window (name, product, light count and effect), or what OpenRGB calls it.
+      placeholder: RAM stick 1 · ENE DRAM · 8 lights · Chase Fade
+  - type: input
+    id: setup
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 26H2

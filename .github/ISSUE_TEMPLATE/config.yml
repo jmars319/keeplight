@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security problem privately
+    url: https://github.com/jmars319/keeplight/security/advisories/new
+    about: For anything that could harm a PC or hardware, or a light changed without being set.
