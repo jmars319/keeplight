@@ -152,10 +152,12 @@ impl Device {
         self.modes.iter().any(|m| m.flags & (flags::MANUAL_SAVE | flags::AUTOMATIC_SAVE) != 0)
     }
 
-    /// The color most of its LEDs show, or `None` when it has no LEDs.
-    pub fn main_color(&self) -> Option<Rgb> {
+    /// The color most of its lit LEDs show, or `None` when every LED is off
+    /// (black) or it has none. Off LEDs are left out of the count, so a
+    /// keyboard lit only on a few keys still reports those keys' color.
+    pub fn lit_color(&self) -> Option<Rgb> {
         let mut counts: Vec<(Rgb, usize)> = Vec::new();
-        for c in &self.colors {
+        for c in self.colors.iter().filter(|c| !c.is_black()) {
             match counts.iter_mut().find(|(k, _)| k == c) {
                 Some((_, n)) => *n += 1,
                 None => counts.push((*c, 1)),
@@ -344,7 +346,7 @@ pub(crate) mod tests {
         assert_eq!(d.location, "I2C: SMBus 0x71");
         assert_eq!(d.active_mode_name(), Some("Chase Fade"));
         assert_eq!(d.led_count(), 8);
-        assert_eq!(d.main_color(), Some(Rgb { r: 255, g: 0, b: 0 }));
+        assert_eq!(d.lit_color(), Some(Rgb { r: 255, g: 0, b: 0 }));
         assert!(!d.can_store_color());
     }
 
@@ -363,7 +365,19 @@ pub(crate) mod tests {
         let d = Device::parse(4, &f.encode(), 3).unwrap();
         assert_eq!(d.kind, Kind::Keyboard);
         assert_eq!(d.zones[0].matrix, Some((3, 2)));
-        assert!(d.main_color().unwrap().is_black());
+        assert_eq!(d.lit_color(), None);
+    }
+
+    #[test]
+    fn a_few_lit_keys_still_count_as_lit() {
+        let green = 0x00ff00;
+        let mut colors = vec![0; 10];
+        colors[2] = green;
+        colors[3] = green;
+        let mut f = Fixture::ram("Keyboard", "HID", 0);
+        f.colors = colors;
+        let d = Device::parse(0, &f.encode(), 3).unwrap();
+        assert_eq!(d.lit_color(), Some(Rgb { r: 0, g: 255, b: 0 }));
     }
 
     #[test]

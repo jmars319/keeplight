@@ -36,7 +36,8 @@ pub struct Row {
     /// Zone names with their light counts, when there is more than one zone.
     pub zones: String,
     pub note: String,
-    /// The color most of its lights show; `None` when all are off.
+    /// The color most of its lit lights show; `None` only when every light
+    /// is off.
     pub swatch: Option<(u8, u8, u8)>,
 }
 
@@ -103,14 +104,7 @@ fn rows(devices: &[Device]) -> Vec<Row> {
             } else {
                 "Can't save a color to itself, so it resets whenever it loses power.".to_string()
             };
-            Row {
-                name,
-                product: d.name.clone(),
-                meta,
-                zones,
-                note,
-                swatch: d.main_color().filter(|c| !c.is_black()).map(|c| (c.r, c.g, c.b)),
-            }
+            Row { name, product: d.name.clone(), meta, zones, note, swatch: d.lit_color().map(|c| (c.r, c.g, c.b)) }
         })
         .collect()
 }
@@ -190,6 +184,16 @@ mod tests {
         assert!(v.rows[0].note.contains("resets"));
         assert!(v.rows[2].note.is_empty());
         assert_eq!(v.rows[3].swatch, None);
+    }
+
+    #[test]
+    fn mostly_dark_device_with_some_lit_keys_is_not_off() {
+        let mut colors = vec![Rgb::default(); 100];
+        colors[0] = RED;
+        let snap =
+            Snapshot { server_protocol: 6, devices: vec![device(Kind::Keyboard, "Apex", "Direct", colors, false)] };
+        let v = build(&Ok(snap), "a");
+        assert_eq!(v.rows[0].swatch, Some((255, 0, 0)));
     }
 
     #[test]
