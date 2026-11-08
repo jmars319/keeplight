@@ -1,0 +1,54 @@
+name: Publish to jamarq-releases
+
+# When a reviewed draft release is published, copies its installer to
+# JAMARQ-Digital-LLC/jamarq-releases as keeplight-v<version>, and points
+# the keeplight-latest feed (release.json: version, url, sha256) at it.
+# The build itself stays in release.yml; this job only republishes its output.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-feed
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Read the version and download the installer
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${TAG#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag $TAG is not v<MAJOR.MINOR.PATCH>"
+            exit 1
+          fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "Keeplight-${version}-setup.exe" --dir "$RUNNER_TEMP"
+          {
+            echo "version=$version"
+            echo "installer=$RUNNER_TEMP/Keeplight-${version}-setup.exe"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        uses: JAMARQ-Digital-LLC/jamarq-releases/publish@f07ce6c83b69b22391f9947d44ecf2639a23c01c
+        with:
+          app: keeplight
+          kind: plain
+          version: ${{ steps.release.outputs.version }}
+          token: ${{ secrets.VAEXCORE_RELEASES_TOKEN }}
+          installer: ${{ steps.release.outputs.installer }}
+          notes: >-
+            Keeplight ${{ steps.release.outputs.version }}. GPL-3.0; source and
+            release notes: ${{ github.event.release.html_url }}

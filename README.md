@@ -32,6 +32,8 @@ Set `KEEPLIGHT_OPENRGB` to another `host:port` to point Keeplight at a different
 
 `scripts/package.ps1` builds the portable zip and, when Inno Setup 6 is installed, the per-user installer into `dist/`. `scripts/generate-icon.ps1` redraws the icon in `assets/`.
 
+Releases: a `v*` tag builds those into a draft GitHub release. Publishing the draft also copies the installer to [jamarq-releases](https://github.com/JAMARQ-Digital-LLC/jamarq-releases) as `keeplight-<version>-x64-setup.exe`, where `keeplight-latest/release.json` names the newest one and its SHA-256 (`.github/workflows/publish-feed.yml`).
+
 ## Safety
 
 [docs/safety-model.md](docs/safety-model.md) lists every request Keeplight sends to OpenRGB. It writes no file.
