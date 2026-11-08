@@ -5,6 +5,13 @@ all-features = false
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # pin-utils is unmaintained, not vulnerable. It is reached only at compile
+    # time, through Slint's spin_on (slint-build, slint-macros), and is not in
+    # the shipped exe. Slint 1.18.1 is the newest release. Expires 2027-02-08;
+    # recorded in agentic-instructions docs/security-advisory-decisions.md.
+    { id = "RUSTSEC-2026-0441", reason = "compile-time only via Slint's spin_on; no upgrade; expires 2027-02-08" },
+]
 
 [licenses]
 version = 2
