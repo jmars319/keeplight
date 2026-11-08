@@ -42,12 +42,12 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Publish
-        uses: JAMARQ-Digital-LLC/jamarq-releases/publish@f07ce6c83b69b22391f9947d44ecf2639a23c01c
+        uses: JAMARQ-Digital-LLC/jamarq-releases/publish@c3a65025733faf674acb5d4d9f269242052fa74f
         with:
           app: keeplight
           kind: plain
           version: ${{ steps.release.outputs.version }}
-          token: ${{ secrets.VAEXCORE_RELEASES_TOKEN }}
+          token: ${{ secrets.JAMARQ_RELEASES_TOKEN }}
           installer: ${{ steps.release.outputs.installer }}
           notes: >-
             Keeplight ${{ steps.release.outputs.version }}. GPL-3.0; source and
