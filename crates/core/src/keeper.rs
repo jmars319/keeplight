@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
-use crate::keep::{self, ActionError, Run};
+use crate::keep::{self, ActionError, Outcome, Run};
 use crate::sdk::wire::packet;
 use crate::sdk::{Client, SdkError};
 
@@ -23,6 +23,8 @@ pub enum Trigger {
     Wake,
     DevicesChanged,
     OpenRgbBack,
+    /// You asked, from the tray icon's menu.
+    Asked,
 }
 
 impl Trigger {
@@ -33,6 +35,7 @@ impl Trigger {
             Trigger::Wake => "after the PC woke",
             Trigger::DevicesChanged => "after OpenRGB's device list changed",
             Trigger::OpenRgbBack => "after OpenRGB came back",
+            Trigger::Asked => "when you asked",
         }
     }
 
@@ -40,6 +43,7 @@ impl Trigger {
     /// telling one: waking explains a device-list change, not the other way.
     fn rank(self) -> u8 {
         match self {
+            Trigger::Asked => 4,
             Trigger::Start => 3,
             Trigger::Wake => 2,
             Trigger::OpenRgbBack => 1,
@@ -135,6 +139,51 @@ pub fn run(
     }
 }
 
+/// What went wrong in a run, one sentence per problem; empty when every kept
+/// device held.
+pub fn problems(result: &Result<Run, ActionError>) -> Vec<String> {
+    let run = match result {
+        Ok(run) => run,
+        Err(e) => return vec![format!("Couldn't put any kept device back. {e}")],
+    };
+    run.reports
+        .iter()
+        .filter_map(|r| match &r.result {
+            Ok(Outcome::Held) => None,
+            Ok(Outcome::NotHeld) => Some(format!("{} was sent its color but reads back as something else.", r.label())),
+            Ok(Outcome::Skipped(reason)) | Err(reason) => Some(format!("{} wasn't put back: {reason}.", r.label())),
+        })
+        .collect()
+}
+
+/// Decides when to tell you about problems: once when they appear or change,
+/// not again on every wake while they stay the same, and again after they
+/// clear and come back.
+#[derive(Debug, Default)]
+pub struct Notices {
+    last: Vec<String>,
+}
+
+/// What to show in a notification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    pub title: String,
+    pub body: String,
+}
+
+impl Notices {
+    pub fn next(&mut self, problems: Vec<String>) -> Option<Notice> {
+        if problems == self.last {
+            return None;
+        }
+        self.last = problems;
+        let first = self.last.first()?;
+        let more = self.last.len() - 1;
+        let body = if more == 0 { first.clone() } else { format!("{first} And {more} more; the log has them all.") };
+        Some(Notice { title: "Keeplight couldn't put a light back".into(), body })
+    }
+}
+
 /// A flag the front end sets to stop [`watch`].
 pub fn stop_flag() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
@@ -147,7 +196,7 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
-    use crate::keep::{Kept, Outcome, Setup};
+    use crate::keep::{Kept, Setup};
     use crate::testing::{self, FakeServer};
 
     const QUICK: Timing =
@@ -214,6 +263,45 @@ mod tests {
         });
         assert_eq!(runs, [(Trigger::Wake, Ok(Outcome::Held))]);
         assert_eq!(server.device(0).active_mode_name(), Some("Chase Fade"));
+    }
+
+    fn report(location: &str, result: Result<Outcome, String>) -> crate::keep::Report {
+        crate::keep::Report { name: "ENE DRAM".into(), location: location.into(), result }
+    }
+
+    #[test]
+    fn problems_are_one_sentence_each_and_none_when_everything_held() {
+        let ok = Run { reports: vec![report("SMBus 0x71", Ok(Outcome::Held))], waited: Duration::ZERO };
+        assert!(problems(&Ok(ok)).is_empty());
+        let bad = Run {
+            reports: vec![
+                report("I2C: PawnIO SMBus i801 0, address 0x71", Ok(Outcome::Held)),
+                report("I2C: PawnIO SMBus i801 0, address 0x73", Err("OpenRGB doesn't list it".into())),
+                report("SMBus 0x75", Ok(Outcome::NotHeld)),
+            ],
+            waited: Duration::ZERO,
+        };
+        assert_eq!(
+            problems(&Ok(bad)),
+            [
+                "ENE DRAM, address 0x73 wasn't put back: OpenRGB doesn't list it.",
+                "ENE DRAM at SMBus 0x75 was sent its color but reads back as something else.",
+            ]
+        );
+        assert_eq!(problems(&Err(ActionError::NotFound)).len(), 1);
+    }
+
+    #[test]
+    fn the_same_problems_are_told_once() {
+        let mut notices = Notices::default();
+        let gone = vec!["ENE DRAM, address 0x73 wasn't put back: OpenRGB doesn't list it.".to_string()];
+        let n = notices.next(gone.clone()).unwrap();
+        assert_eq!(n.body, gone[0]);
+        assert_eq!(notices.next(gone.clone()), None, "not again on the next wake");
+        assert_eq!(notices.next(vec![]), None, "clearing tells nothing");
+        assert!(notices.next(gone.clone()).is_some(), "but coming back is told again");
+        let two = vec![gone[0].clone(), "Another.".to_string()];
+        assert!(notices.next(two).unwrap().body.ends_with("And 1 more; the log has them all."));
     }
 
     #[test]

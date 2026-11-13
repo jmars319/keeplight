@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use keeplight_core::keep::{ActionError, Outcome, Run};
-use keeplight_core::keeper::{self, Timing, Trigger};
+use keeplight_core::keeper::{self, Notices, Timing, Trigger};
 
 pub fn run() -> i32 {
     let Some(_only) = crate::platform::SingleInstance::acquire(&crate::platform::keeper_name()) else {
@@ -29,6 +29,15 @@ pub fn run() -> i32 {
         std::thread::spawn(move || keeper::watch(&address, &tx, &stop, timing));
     }
     let wake = crate::platform::on_wake(tx.clone());
+    let tray = crate::tray::start(tx.clone(), crate::platform::settings_path());
+    if let Err(e) = &tray {
+        let _ = crate::platform::append_log(&[format!(
+            "{}  Couldn't set up notifications, so problems are only written here: {e}",
+            crate::platform::local_timestamp()
+        )]);
+    }
+    let tray = tray.ok();
+    let mut notices = Notices::default();
     crate::platform::keeper_stop::listen({
         let stop = stop.clone();
         move || {
@@ -64,6 +73,10 @@ pub fn run() -> i32 {
         // Nothing kept and nothing wrong: nothing worth a log line.
         if !matches!(result, Ok(run) if run.reports.is_empty()) {
             let _ = crate::platform::append_log(&log_lines(&crate::platform::local_timestamp(), why, result));
+        }
+        // Tell you once when something didn't hold, not on every wake after.
+        if let (Some(tray), Some(notice)) = (&tray, notices.next(keeper::problems(result))) {
+            tray.notify(notice);
         }
     });
     0

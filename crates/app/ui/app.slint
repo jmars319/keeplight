@@ -46,6 +46,9 @@ export global Ui {
     in property <string> sign-in-note;
     in property <string> last-run;
     callback set-sign-in(bool);
+    // The keeper's icon in the notification area (off by default).
+    in-out property <bool> tray-icon;
+    callback set-tray-icon(bool);
 }
 
 component Chip inherits Rectangle {
@@ -275,6 +278,11 @@ export component AppWindow inherits Window {
                         font-size: 12px;
                         color: Theme.secondary-text;
                         wrap: word-wrap;
+                    }
+                    Switch {
+                        text: "Show the keeper's icon in the notification area";
+                        checked <=> Ui.tray-icon;
+                        toggled => { Ui.set-tray-icon(self.checked); }
                     }
                     if Ui.last-run != "": Text {
                         text: "Last run: " + Ui.last-run;

@@ -3,6 +3,7 @@
 mod gui;
 mod keeper;
 mod platform;
+mod tray;
 
 slint::include_modules!();
 

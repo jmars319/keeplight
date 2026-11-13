@@ -33,6 +33,8 @@ pub struct View {
     pub sign_in_note: String,
     /// The keeper's last log summary, if it has run.
     pub last_run: String,
+    /// Whether the keeper shows its icon in the notification area.
+    pub tray_icon: bool,
 }
 
 /// The sign-in switch's state and sentence. `current` is the registered
@@ -163,6 +165,7 @@ pub fn build(result: &Result<Snapshot, String>, setup: &SetupView, address: &str
         sign_in: false,
         sign_in_note: String::new(),
         last_run: String::new(),
+        tray_icon: false,
     }
 }
 
@@ -257,6 +260,7 @@ fn message(chip: &str, heading: &str, message: &str) -> View {
         sign_in: false,
         sign_in_note: String::new(),
         last_run: String::new(),
+        tray_icon: false,
     }
 }
 
