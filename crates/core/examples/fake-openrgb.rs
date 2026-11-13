@@ -1,6 +1,7 @@
 //! A fake OpenRGB SDK server for the smoke tests: two RAM sticks and a
-//! keyboard, all red, that accept Keeplight's requests without any real
-//! lights. Prints its address on the first line, then serves until killed.
+//! keyboard, all red, and a motherboard with every light off, that accept
+//! Keeplight's requests without any real lights. Prints its address on the
+//! first line, then serves until killed.
 //!
 //!   cargo run -p keeplight-core --features testing --example fake-openrgb [-- 127.0.0.1:0]
 
@@ -8,9 +9,11 @@ use keeplight_core::testing::{self, FakeServer, RED};
 
 fn main() {
     let bind = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:0".into());
+    let mut dark_board = testing::board();
+    dark_board.modes[1].colors = vec![keeplight_core::device::Rgb::default()];
     let server = FakeServer::start_on(
         &bind,
-        vec![testing::ram("SMBus 0x71"), testing::ram("SMBus 0x73"), testing::keyboard(RED)],
+        vec![testing::ram("SMBus 0x71"), testing::ram("SMBus 0x73"), testing::keyboard(RED), dark_board],
     );
     println!("{}", server.address);
     loop {

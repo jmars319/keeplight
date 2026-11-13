@@ -26,6 +26,8 @@ Put back sends these only to the device you pressed it on, and only that device'
 
 While running, the keeper also holds a second connection that sends only `REQUEST_PROTOCOL_VERSION` and `SET_CLIENT_NAME`, then just listens for OpenRGB's own `DEVICE_LIST_UPDATED` (100) notices. It never sends a request that changes a light (`a_device_list_change_becomes_a_trigger`). It sends nothing when the device no longer fits what was kept, for example when it reports a different number of lights. Afterwards it reads the device back. That read comes from OpenRGB's record of the device, so it shows that OpenRGB took the request, not that the hardware shows it: RAM that loses power falls back to its own effect without OpenRGB noticing until it scans again.
 
+**Stop keeping** removes a device from the setup. If that device is in Direct mode, which shows nothing unless a program keeps sending colors, and it has a built-in mode named "Onboard" (the SteelSeries keyboard on this PC does), Keeplight sends it one `RGBCONTROLLER_UPDATEMODE` switching it to that mode, with the mode's settings exactly as OpenRGB reported them, and reads it back. Every other device is sent nothing and keeps showing what it shows until it loses power. If the read-back still shows another mode, the window says so (`stopping_hands_a_direct_keyboard_back_to_its_own_lighting`, `a_keyboard_that_ignores_the_hand_back_is_reported`).
+
 Keeplight never sends `RGBCONTROLLER_SAVEMODE`, which writes into a device's own memory, and never loads, saves or deletes OpenRGB profiles. On 2026-10-23 loading a saved OpenRGB profile turned a keyboard's lights off, because a profile holds every device, including ones nobody chose a color for.
 
 Tests against a fake server hold this, including `put_back_all_restores_every_kept_device_and_nothing_else` for the keeper: reading sends only the read requests (`reads_every_device_and_negotiates_down`), writes reach only the named device (`writes_reach_only_the_named_device`, `putting_back_sends_only_that_device_its_own_setup`), Keep sends no write at all (`keep_now_and_put_back_now_work_by_name_and_location`), and a device that changed gets nothing (`a_changed_device_is_skipped_without_sending_anything`).
@@ -33,6 +35,7 @@ Tests against a fake server hold this, including `put_back_all_restores_every_ke
 ## Written by the app
 
 - `%LOCALAPPDATA%\Keeplight\setup.json`, or `setup.json` in `KEEPLIGHT_DATA` when that is set: the devices you pressed **Keep this** on, each with its product name, location, light count, mode and colors. Written through a temporary file and a rename. A setup Keeplight can't read is never saved over; the window says so and turns Keep and Put back off.
+- `setup.lock` beside it: an empty file the window and the keeper lock while they change the setup or send a kept setup, so a device you stopped keeping can't be put back by a keeper run that read the setup earlier.
 - `keeper.log` beside it: one line each time the keeper runs, saying how many kept devices it put back, plus a line for each that didn't hold. Trimmed to its last 400 lines once it passes 800.
 - `settings.json` beside it: Keeplight's preferences, today only whether the keeper shows its icon in the notification area (off by default). A missing or unreadable file means the defaults.
 - The startup entry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `Keeplight`, holding `"<path to keeplight.exe>" --keep`. Written only when you turn on **Put kept lights back when you sign in**, and removed when you turn it off or uninstall. `KEEPLIGHT_STARTUP_NAME` renames the value, which the smoke test uses so it never touches the real one.
@@ -55,4 +58,4 @@ Tests against a fake server hold this, including `put_back_all_restores_every_ke
 - No telemetry or accounts.
 - No admin rights. The app runs as the signed-in user.
 - No direct hardware access. Every read and write goes through OpenRGB.
-- No device is kept while all its lights are off, so Keep can't save a dark device.
+- No device is kept dark without asking. A device whose lights are all off, or that is in its "Off" mode, offers **Keep it dark…**, which asks "Keep every light off, even after sleep?" in its row before anything is saved (`keeping_a_dark_device_needs_the_front_end_to_have_asked`).

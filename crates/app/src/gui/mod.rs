@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use keeplight_core::keep::{self, Outcome, Setup};
+use keeplight_core::keep::{self, Dark, HandBack, Outcome, Setup};
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
@@ -73,6 +73,8 @@ pub fn run() -> i32 {
     };
     g.on_keep(send(Command::Keep));
     g.on_put_back(send(Command::PutBack));
+    g.on_keep_dark(send(Command::KeepDark));
+    g.on_stop_keeping(send(Command::StopKeeping));
     {
         let tx = tx.clone();
         g.on_set_sign_in(move |on| {
@@ -99,7 +101,10 @@ pub fn run() -> i32 {
 /// A button press, carrying the row it came from.
 enum Command {
     Keep(DeviceRow),
+    /// Keep a device whose lights are all off, after the row asked.
+    KeepDark(DeviceRow),
     PutBack(DeviceRow),
+    StopKeeping(DeviceRow),
     /// Turn the keeper at sign-in on or off.
     SignIn(bool),
     /// Show or hide the keeper's icon in the notification area.
@@ -109,15 +114,45 @@ enum Command {
 fn run_command(command: &Command, address: &str, setup_path: &Path) -> view::Notice {
     let note = |text: String, warn: bool| view::Notice { text, warn };
     match command {
-        Command::Keep(row) => match keep::keep_now(address, setup_path, &row.name_key, &row.location_key) {
+        Command::Keep(row) => match keep::keep_now(address, setup_path, &row.name_key, &row.location_key, Dark::Refuse)
+        {
             Ok(_) => note(format!("Kept {}. Put back returns it to what it shows now.", row.name), false),
             Err(e) => note(format!("Couldn't keep {}. {e}", row.name), true),
+        },
+        Command::KeepDark(row) => {
+            match keep::keep_now(address, setup_path, &row.name_key, &row.location_key, Dark::Allow) {
+                Ok(_) => note(format!("Kept {} dark. The keeper turns it back off after sleep.", row.name), false),
+                Err(e @ keep::ActionError::NoLongerDark) => note(format!("Didn't keep {}. {e}", row.name), true),
+                Err(e) => note(format!("Couldn't keep {}. {e}", row.name), true),
+            }
+        }
+        Command::StopKeeping(row) => match keep::stop_keeping(address, setup_path, &row.name_key, &row.location_key) {
+            Ok(HandBack::OwnLighting(mode)) => {
+                note(format!("Stopped keeping {}. It's back on its own {mode} lighting.", row.name), false)
+            }
+            Ok(HandBack::NotTaken(mode, now)) => note(
+                format!(
+                    "Stopped keeping {}. It was sent its own {mode} lighting but still reports {now}. If it's \
+                         dark, set it in OpenRGB or unplug it and plug it back in.",
+                    row.name
+                ),
+                true,
+            ),
+            Ok(HandBack::LeftAsIs) => note(
+                format!("Stopped keeping {}. It keeps showing what it shows now until it loses power.", row.name),
+                false,
+            ),
+            Ok(HandBack::NotListed) => note(
+                format!("Stopped keeping {}. OpenRGB doesn't list it right now, so nothing was sent.", row.name),
+                false,
+            ),
+            Err(e) => note(format!("Couldn't stop keeping {}. {e}", row.name), true),
         },
         Command::PutBack(row) => match keep::put_back_now(address, setup_path, &row.name_key, &row.location_key) {
             Ok(Outcome::Held) => note(format!("Put {} back.", row.name), false),
             Ok(Outcome::NotHeld) => note(
                 format!(
-                    "Sent {} its kept setup, but it reads back as something else. Another program may be                      setting it, or it can't show that setup.",
+                    "Sent {} its kept setup, but it reads back as something else. Another program may be setting it, or it can't show that setup.",
                     row.name
                 ),
                 true,
@@ -194,6 +229,7 @@ fn apply(ui: &AppWindow, v: view::View) {
             status: r.status.as_str().into(),
             status_text: r.status_text.into(),
             can_keep: r.can_keep,
+            dark: r.dark,
             name: r.name.into(),
             product: r.product.into(),
             meta: r.meta.into(),

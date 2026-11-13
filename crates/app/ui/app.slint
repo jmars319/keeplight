@@ -14,6 +14,8 @@ export struct DeviceRow {
     status: string,
     status-text: string,
     can-keep: bool,
+    // Every light is off: Keep asks before keeping it dark.
+    dark: bool,
     name: string,
     product: string,
     meta: string,
@@ -41,6 +43,8 @@ export global Ui {
     in-out property <bool> busy;
     callback keep(DeviceRow);
     callback put-back(DeviceRow);
+    callback keep-dark(DeviceRow);
+    callback stop-keeping(DeviceRow);
     // The keeper at sign-in.
     in-out property <bool> sign-in;
     in property <string> sign-in-note;
@@ -86,6 +90,8 @@ component Swatch inherits Rectangle {
 
 component DeviceRowView inherits Rectangle {
     in property <DeviceRow> item;
+    // Showing "Keep every light off?" for a dark device.
+    property <bool> confirm-dark;
     min-height: content.preferred-height;
     border-radius: Theme.control-radius;
     background: Theme.surface;
@@ -176,11 +182,47 @@ component DeviceRowView inherits Rectangle {
                 accessible-label: "Put back " + root.item.name;
                 clicked => { Ui.put-back(root.item); }
             }
-            if root.item.status != "kept": Button {
-                text: root.item.status == "" ? "Keep this" : "Keep this instead";
+            if root.item.status != "kept" && !(root.confirm-dark && root.item.dark): Button {
+                text: root.item.dark ? "Keep it dark…" : root.item.status == "" ? "Keep this" : "Keep this instead";
                 enabled: root.item.can-keep && !Ui.busy;
                 accessible-label: (root.item.status == "" ? "Keep " : "Keep what this shows now, ") + root.item.name;
-                clicked => { Ui.keep(root.item); }
+                clicked => {
+                    if (root.item.dark) {
+                        root.confirm-dark = true;
+                    } else {
+                        Ui.keep(root.item);
+                    }
+                }
+            }
+            // Asking before keeping a device dark (owner rule, 2026-10-23).
+            // The question only stands while the device is still dark.
+            if root.confirm-dark && root.item.dark: Text {
+                text: "Keep every light off, even after sleep?";
+                font-size: 12px;
+                color: Theme.warning;
+                wrap: word-wrap;
+                max-width: 180px;
+            }
+            if root.confirm-dark && root.item.dark: Button {
+                text: "Keep it dark";
+                primary: true;
+                enabled: !Ui.busy;
+                accessible-label: "Keep " + root.item.name + " dark";
+                clicked => {
+                    root.confirm-dark = false;
+                    Ui.keep-dark(root.item);
+                }
+            }
+            if root.confirm-dark && root.item.dark: Button {
+                text: "Cancel";
+                accessible-label: "Don't keep " + root.item.name + " dark";
+                clicked => { root.confirm-dark = false; }
+            }
+            if root.item.status != "": Button {
+                text: "Stop keeping";
+                enabled: !Ui.busy;
+                accessible-label: "Stop keeping " + root.item.name;
+                clicked => { Ui.stop-keeping(root.item); }
             }
         }
     }

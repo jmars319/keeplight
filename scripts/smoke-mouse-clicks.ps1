@@ -117,6 +117,17 @@ try {
     Check 'button: Keep turns into a Kept status' (Eventually { -not (Has 'Keep RAM stick 2') })
     Click 'Keep Keyboard'
     Check 'button: a second Keep adds the keyboard' (Eventually { (Kept).Count -eq 2 })
+    # A dark device asks before it is kept.
+    Click 'Keep Motherboard'
+    Check 'button: Keep on a dark device asks first' (Eventually { Has 'Keep Motherboard dark' })
+    Check 'asking saves nothing yet' ((Kept).Count -eq 2)
+    Click "Don't keep Motherboard dark"
+    Check 'button: Cancel saves nothing' (Eventually { -not (Has 'Keep Motherboard dark') -and (Kept).Count -eq 2 })
+    Click 'Keep Motherboard'
+    Click 'Keep Motherboard dark'
+    Check 'button: Keep it dark saves it' (Eventually { (Kept).Count -eq 3 })
+    Click 'Stop keeping Motherboard'
+    Check 'button: Stop keeping removes it' (Eventually { (Kept).Count -eq 2 })
     Click 'Put kept lights back when you sign in'
     Check 'switch: on registers this exe with --keep' (Eventually { (Entry $entry) -like '*keeplight.exe" --keep' })
     # The keeper it starts inherits the fake server and the throwaway folder.

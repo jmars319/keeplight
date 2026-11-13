@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use keeplight_core::device::{Device, Kind};
-use keeplight_core::keep::{Fit, KeepError, Kept, Setup};
+use keeplight_core::keep::{Fit, KeepError, Kept, Setup, is_dark};
 use keeplight_core::sdk::Snapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +108,8 @@ pub struct Row {
     /// A sentence about the status, or why it can't be kept.
     pub status_text: String,
     pub can_keep: bool,
+    /// Every light is off, so keeping it asks first.
+    pub dark: bool,
 }
 
 /// The saved setup as the window sees it: read, or the reason it couldn't be.
@@ -206,10 +208,12 @@ fn rows(devices: &[Device], setup: Option<&Setup>) -> Vec<Row> {
             };
             let (status, status_text) = status(d, setup.and_then(|s| s.find(d)));
             let capture = Kept::capture(d);
-            let can_keep = setup.is_some() && capture.is_ok();
+            let dark = is_dark(d);
+            // A dark device can be kept too, but the row asks first.
+            let can_keep = setup.is_some() && (capture.is_ok() || matches!(capture, Err(KeepError::AllOff)));
             let status_text = match (&capture, status) {
                 (Err(KeepError::AllOff), Status::NotKept) => {
-                    "Every light is off. Set a color in OpenRGB to keep it.".to_string()
+                    "Every light is off. Keeping it keeps it dark.".to_string()
                 }
                 (Err(e), Status::NotKept) => e.to_string(),
                 _ => status_text,
@@ -226,6 +230,7 @@ fn rows(devices: &[Device], setup: Option<&Setup>) -> Vec<Row> {
                 status,
                 status_text,
                 can_keep,
+                dark,
             }
         })
         .collect()
@@ -391,8 +396,9 @@ mod tests {
     fn a_dark_device_says_why_it_cant_be_kept() {
         let dark = device(Kind::Keyboard, "Apex", "Direct", vec![Rgb::default(); 4], false);
         let v = build(&snap(vec![dark]), &empty(), "a", None);
-        assert!(!v.rows[0].can_keep);
-        assert!(v.rows[0].status_text.contains("Every light is off"));
+        assert!(v.rows[0].can_keep, "it can be kept, after the row asks");
+        assert!(v.rows[0].dark);
+        assert!(v.rows[0].status_text.contains("keeps it dark"));
     }
 
     #[test]

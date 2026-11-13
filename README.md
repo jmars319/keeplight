@@ -22,7 +22,10 @@ Early development, nothing released yet. Stage 02, the keeper, is being built:
 
 - **A notification** tells you when the keeper couldn't put a kept device back, once per new problem. **Show the keeper's icon in the notification area** (off by default) keeps an icon there whose menu can open Keeplight or put kept lights back now.
 
-Stopping keeping a device, which hands it back to its own lighting, comes next. See the plan page.
+- **Stop keeping** removes a device from the setup and, if it's in Direct mode and has a built-in "Onboard" mode, hands it back to that, so it isn't left dark.
+- **Keep it dark…** on a device whose lights are all off asks once before keeping it that way.
+
+Stage 02 is complete with these. Setting colors in Keeplight itself comes in stage 03. See the plan page.
 
 ## Build from source
 
