@@ -240,6 +240,26 @@ pub fn put_back(client: &mut Client, kept: &Kept, device: &Device) -> Result<Out
     Ok(if kept.is_for(&after) && kept.fit(&after) == Fit::Same { Outcome::Held } else { Outcome::NotHeld })
 }
 
+/// Holds `setup.lock` beside the setup file for as long as it lives. The
+/// window and the keeper are separate processes: every change to the setup,
+/// and every send of a kept setup, happens under this lock, so a device you
+/// stopped keeping can't be put back by a keeper run that read the setup
+/// before you did.
+pub struct SetupLock(#[allow(dead_code)] std::fs::File);
+
+impl SetupLock {
+    pub fn acquire(setup_path: &Path) -> Result<SetupLock, SetupError> {
+        let path = setup_path.with_extension("lock");
+        let write = |source| SetupError::Write { path: path.clone(), source };
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(write)?;
+        }
+        let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path).map_err(write)?;
+        file.lock().map_err(write)?;
+        Ok(SetupLock(file))
+    }
+}
+
 /// Why a keep or put-back request from a front end didn't happen.
 #[derive(Debug, thiserror::Error)]
 pub enum ActionError {
@@ -253,6 +273,8 @@ pub enum ActionError {
     NotFound,
     #[error("Nothing is kept for that device yet.")]
     NotKept,
+    #[error("Its lights came on while you were deciding, so nothing was kept. Press Keep this to keep what it shows.")]
+    NoLongerDark,
 }
 
 /// What happened to a device's lighting when Keeplight stopped keeping it.
@@ -295,12 +317,15 @@ pub enum Dark {
 /// at `address` and saves it into the setup at `setup_path`. Sends nothing
 /// that changes a light.
 pub fn keep_now(address: &str, setup_path: &Path, name: &str, location: &str, dark: Dark) -> Result<Kept, ActionError> {
+    let _lock = SetupLock::acquire(setup_path)?;
     // Read the setup first, so an unreadable one is never saved over.
     let mut setup = Setup::load(setup_path)?;
     let mut client = Client::connect(address)?;
     let device = find_device(&mut client, name, location)?;
     let kept = match dark {
         Dark::Refuse => Kept::capture(&device)?,
+        // Asked about a dark device: keep it only if it is still dark.
+        Dark::Allow if !is_dark(&device) => return Err(ActionError::NoLongerDark),
         Dark::Allow => Kept::capture_dark(&device)?,
     };
     setup.keep(kept.clone());
@@ -313,6 +338,8 @@ pub fn keep_now(address: &str, setup_path: &Path, name: &str, location: &str, da
 /// to go back to. Sends that one device at most one `UPDATE_MODE`, with the
 /// built-in mode exactly as OpenRGB reported it.
 pub fn stop_keeping(address: &str, setup_path: &Path, name: &str, location: &str) -> Result<HandBack, ActionError> {
+    // Held through the hand-back, so a keeper run can't slip in between.
+    let _lock = SetupLock::acquire(setup_path)?;
     let mut setup = Setup::load(setup_path)?;
     let before = setup.devices.len();
     setup.devices.retain(|k| !(k.name == name && k.location == location));
@@ -340,6 +367,7 @@ pub fn stop_keeping(address: &str, setup_path: &Path, name: &str, location: &str
 
 /// Puts the named device back to what is kept for it (see [`put_back`]).
 pub fn put_back_now(address: &str, setup_path: &Path, name: &str, location: &str) -> Result<Outcome, ActionError> {
+    let _lock = SetupLock::acquire(setup_path)?;
     let setup = Setup::load(setup_path)?;
     let mut client = Client::connect(address)?;
     let device = find_device(&mut client, name, location)?;
@@ -407,7 +435,16 @@ pub fn put_back_all(address: &str, setup_path: &Path, wait: Duration, poll: Dura
     };
     let waited = start.elapsed();
     let mut reports = Vec::new();
-    for kept in &setup.devices {
+    for waited_for in &setup.devices {
+        // The setup may have changed while this run waited: you may have
+        // stopped keeping a device, or kept it again with other colors. Each
+        // send uses the setup as it is now, under the lock.
+        let _lock = SetupLock::acquire(setup_path)?;
+        let now = Setup::load(setup_path)?;
+        let Some(kept) = now.devices.iter().find(|k| k.name == waited_for.name && k.location == waited_for.location)
+        else {
+            continue;
+        };
         let result = match devices.iter().find(|d| kept.is_for(d)) {
             Some(device) => put_back(&mut client, kept, device).map_err(|e| e.to_string()),
             None => Err("OpenRGB doesn't list it".to_string()),
@@ -654,6 +691,47 @@ mod tests {
         ));
         let kept = keep_now(&server.address, &path, "Apex", "HID: keyboard", Dark::Allow).unwrap();
         assert!(kept.colors.iter().all(|c| c.is_black()));
+    }
+
+    #[test]
+    fn keep_it_dark_refuses_a_device_that_lit_up_meanwhile() {
+        let path = temp_path("dark-lit");
+        let server = FakeServer::start(vec![testing::keyboard(RED)]);
+        assert!(matches!(
+            keep_now(&server.address, &path, "Apex", "HID: keyboard", Dark::Allow),
+            Err(ActionError::NoLongerDark)
+        ));
+        assert!(Setup::load(&path).unwrap().devices.is_empty(), "nothing kept");
+    }
+
+    #[test]
+    fn a_device_stopped_while_a_run_waits_is_not_put_back() {
+        let path = temp_path("stop-during-run");
+        let mut setup = Setup::default();
+        setup.keep(Kept::capture(&testing::keyboard(RED)).unwrap());
+        setup.keep(Kept::capture(&testing::ram("SMBus 0x73")).unwrap());
+        setup.save(&path).unwrap();
+        // The keyboard is listed; the RAM stick shows up late, so the run waits.
+        let mut onboard = testing::keyboard(RED);
+        onboard.active_mode = Some(1);
+        let server = FakeServer::start(vec![onboard]);
+        let (state, address, file) = (server.state.clone(), server.address.clone(), path.clone());
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            // You stop keeping the keyboard while the run waits.
+            stop_keeping(&address, &file, "Apex", "HID: keyboard").unwrap();
+            std::thread::sleep(Duration::from_millis(60));
+            let mut rainbow = testing::ram("SMBus 0x73");
+            rainbow.active_mode = Some(1);
+            state.lock().unwrap().devices.push(Device { index: 1, ..rainbow });
+        });
+        let run = put_back_all(&server.address, &path, Duration::from_secs(3), Duration::from_millis(20)).unwrap();
+        assert_eq!(run.reports.len(), 1, "only the RAM stick is still kept");
+        assert_eq!(run.reports[0].location, "SMBus 0x73");
+        assert_eq!(server.device(0).active_mode_name(), Some("Onboard"), "the keyboard stays handed back");
+        let to_keyboard =
+            server.state.lock().unwrap().seen.iter().any(|&(id, dev)| dev == 0 && id == packet::UPDATE_LEDS);
+        assert!(!to_keyboard, "no kept colors were sent to the keyboard");
     }
 
     #[test]

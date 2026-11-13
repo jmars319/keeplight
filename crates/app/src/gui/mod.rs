@@ -122,6 +122,7 @@ fn run_command(command: &Command, address: &str, setup_path: &Path) -> view::Not
         Command::KeepDark(row) => {
             match keep::keep_now(address, setup_path, &row.name_key, &row.location_key, Dark::Allow) {
                 Ok(_) => note(format!("Kept {} dark. The keeper turns it back off after sleep.", row.name), false),
+                Err(e @ keep::ActionError::NoLongerDark) => note(format!("Didn't keep {}. {e}", row.name), true),
                 Err(e) => note(format!("Couldn't keep {}. {e}", row.name), true),
             }
         }
