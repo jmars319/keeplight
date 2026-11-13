@@ -127,7 +127,11 @@ impl Kept {
             return Fit::Incompatible(format!("it no longer has the {} mode", self.mode.name));
         }
         let Some(active) = device.active() else { return Fit::Differs };
+        // The settings a person can change within a mode. The min and max
+        // fields describe what the device can do, so they are left out.
+        let settings = |m: &Mode| (m.speed, m.brightness, m.direction, m.color_mode);
         let same = active.name == self.mode.name
+            && settings(active) == settings(&self.mode)
             && match self.mode.color_mode {
                 color_mode::PER_LED => device.colors == self.colors,
                 color_mode::MODE_SPECIFIC => active.colors == self.mode.colors,
@@ -342,6 +346,20 @@ mod tests {
         fewer.colors.pop();
         assert!(matches!(k.fit(&fewer), Fit::Incompatible(_)));
 
+        for change in [
+            |m: &mut Mode| m.speed += 1,
+            |m: &mut Mode| m.brightness += 1,
+            |m: &mut Mode| m.direction += 1,
+            |m: &mut Mode| m.color_mode = color_mode::NONE,
+        ] {
+            let mut tweaked = ram.clone();
+            change(&mut tweaked.modes[2]);
+            assert_eq!(k.fit(&tweaked), Fit::Differs, "a changed setting in the same mode differs");
+        }
+        let mut wider = ram.clone();
+        wider.modes[2].speed_max += 1;
+        assert_eq!(k.fit(&wider), Fit::Same, "what the device can do isn't a setting");
+
         let kb = testing::keyboard(RED);
         let k = Kept::capture(&kb).unwrap();
         let mut one_key = kb.clone();
@@ -425,6 +443,19 @@ mod tests {
         let device = client.controller(0).unwrap();
         assert_eq!(put_back(&mut client, &kept, &device).unwrap(), Outcome::Held);
         assert_eq!(server.device(0).colors, kb.colors);
+    }
+
+    #[test]
+    fn putting_back_restores_a_changed_speed() {
+        let kept = Kept::capture(&testing::ram("SMBus 0x71")).unwrap();
+        let mut faster = testing::ram("SMBus 0x71");
+        faster.modes[2].speed = 9;
+        let server = FakeServer::start(vec![faster]);
+        let mut client = Client::connect(&server.address).unwrap();
+        let device = client.controller(0).unwrap();
+        assert_eq!(kept.fit(&device), Fit::Differs);
+        assert_eq!(put_back(&mut client, &kept, &device).unwrap(), Outcome::Held);
+        assert_eq!(server.device(0).modes[2].speed, 0);
     }
 
     #[test]
