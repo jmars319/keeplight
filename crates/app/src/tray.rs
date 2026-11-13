@@ -33,6 +33,9 @@ use windows::core::{PCWSTR, w};
 /// The icon's callback message, and the "a notice is waiting" message.
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_NOTICE: u32 = WM_APP + 2;
+/// Enter or Space on the focused icon: `NIN_SELECT | NINF_KEY` in the Win32
+/// headers, which the windows crate doesn't define.
+const NIN_KEYSELECT: u32 = NIN_SELECT | 0x1;
 const SETTINGS_TIMER: usize = 1;
 const MENU_OPEN: usize = 1;
 const MENU_PUT_BACK: usize = 2;
@@ -285,7 +288,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_NOTICE => show_notice(),
         // With NOTIFYICON_VERSION_4 the event is in the low word of lparam.
         WM_TRAY => match (lparam.0 as u32) & 0xffff {
-            NIN_SELECT | NIN_BALLOONUSERCLICK => {
+            NIN_SELECT | NIN_KEYSELECT | NIN_BALLOONUSERCLICK => {
                 open_keeplight();
                 if (lparam.0 as u32) & 0xffff == NIN_BALLOONUSERCLICK {
                     notification_closed();
