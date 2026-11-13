@@ -110,6 +110,10 @@ pub struct Row {
     pub can_keep: bool,
     /// Every light is off, so keeping it asks first.
     pub dark: bool,
+    /// It was kept before, so "Keep it as before" can bring that back.
+    pub has_before: bool,
+    /// It runs a lighting mode of its own, so its colors are unknown.
+    pub own_lighting: bool,
 }
 
 /// The saved setup as the window sees it: read, or the reason it couldn't be.
@@ -207,16 +211,32 @@ fn rows(devices: &[Device], setup: Option<&Setup>) -> Vec<Row> {
                 "Can't save a color to itself, so it resets whenever it loses power.".to_string()
             };
             let (status, status_text) = status(d, setup.and_then(|s| s.find(d)));
+            // What it was kept as before you stopped keeping it, if anything.
+            let before = if status == Status::NotKept { setup.and_then(|s| s.find_before(d)) } else { None };
             let capture = Kept::capture(d);
             let dark = is_dark(d);
             // A dark device can be kept too, but the row asks first.
             let can_keep = setup.is_some() && (capture.is_ok() || matches!(capture, Err(KeepError::AllOff)));
             let status_text = match (&capture, status) {
                 (Err(KeepError::AllOff), Status::NotKept) => {
-                    "Every light is off. Keeping it keeps it dark.".to_string()
+                    "OpenRGB reports every light as off, though another app may be lighting it. Keeping it keeps \
+                     it off."
+                        .to_string()
                 }
                 (Err(e), Status::NotKept) => e.to_string(),
                 _ => status_text,
+            };
+            // Its own lighting first: then the colors OpenRGB reports are stale.
+            let status_text = match (d.own_lighting(), status) {
+                (Some(mode), Status::NotKept) if status_text.is_empty() => {
+                    format!("On its own lighting ({mode}). Keeplight can't see its colors.")
+                }
+                _ => status_text,
+            };
+            let status_text = match before {
+                Some(k) if status_text.is_empty() => format!("Kept before as {}.", describe(k)),
+                Some(k) => format!("{status_text} Kept before as {}.", describe(k)),
+                None => status_text,
             };
             Row {
                 name_key: d.name.clone(),
@@ -227,21 +247,28 @@ fn rows(devices: &[Device], setup: Option<&Setup>) -> Vec<Row> {
                 zones,
                 note,
                 swatch: d.lit_color().map(|c| (c.r, c.g, c.b)),
+                own_lighting: d.own_lighting().is_some(),
                 status,
                 status_text,
                 can_keep,
                 dark,
+                has_before: before.is_some(),
             }
         })
         .collect()
 }
 
-fn status(d: &Device, kept: Option<&Kept>) -> (Status, String) {
-    let Some(k) = kept else { return (Status::NotKept, String::new()) };
-    let what = match k.main_color() {
+/// A kept setup in a few words, such as "Chase Fade in #ff0000".
+fn describe(k: &Kept) -> String {
+    match k.main_color() {
         Some(c) => format!("{} in {}", k.mode.name, c.hex()),
         None => k.mode.name.clone(),
-    };
+    }
+}
+
+fn status(d: &Device, kept: Option<&Kept>) -> (Status, String) {
+    let Some(k) = kept else { return (Status::NotKept, String::new()) };
+    let what = describe(k);
     match k.fit(d) {
         Fit::Same => (Status::Kept, format!("Kept: {what}.")),
         Fit::Differs => (Status::Differs, format!("Showing something other than what you kept ({what}).")),
@@ -398,7 +425,7 @@ mod tests {
         let v = build(&snap(vec![dark]), &empty(), "a", None);
         assert!(v.rows[0].can_keep, "it can be kept, after the row asks");
         assert!(v.rows[0].dark);
-        assert!(v.rows[0].status_text.contains("keeps it dark"));
+        assert!(v.rows[0].status_text.contains("another app may be lighting it"));
     }
 
     #[test]
@@ -424,6 +451,26 @@ mod tests {
         let (on, note) = sign_in(Some(other), Some(exe), 2);
         assert!(on && note.contains("another copy") && note.contains("debug"));
         assert!(sign_in(Some(&exe.to_uppercase()), Some(exe), 1).1.contains("after sleep"), "paths ignore case");
+    }
+
+    #[test]
+    fn a_device_stopped_earlier_offers_its_earlier_setup() {
+        let red = device(Kind::Keyboard, "Apex", "Direct", vec![RED; 4], false);
+        let mut setup = Setup::default();
+        setup.before.push(Kept::capture(&red).unwrap());
+        let mut now = red.clone();
+        now.modes[0].name = "Onboard".into();
+        now.modes[0].color_mode = keeplight_core::device::color_mode::NONE;
+        let v = build(&snap(vec![now]), &Ok(setup), "a", None);
+        assert_eq!(v.rows[0].status, Status::NotKept);
+        assert!(v.rows[0].has_before);
+        assert_eq!(
+            v.rows[0].status_text,
+            "On its own lighting (Onboard). Keeplight can't see its colors. Kept before as Direct in #ff0000."
+        );
+        assert!(v.rows[0].own_lighting);
+        assert_eq!(v.rows[0].swatch, None);
+        assert!(v.rows[0].can_keep, "it can still be kept as it is now");
     }
 
     #[test]

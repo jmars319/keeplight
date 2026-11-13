@@ -236,6 +236,16 @@ impl Device {
         }
     }
 
+    /// The name of the mode when the device is running a lighting mode of its
+    /// own, such as "Onboard" or a rainbow, which colors the lights itself.
+    /// OpenRGB's per-light colors are then stale or blank, so they say nothing
+    /// about what the lights show.
+    pub fn own_lighting(&self) -> Option<&str> {
+        let m = self.active()?;
+        let own = matches!(m.color_mode, color_mode::NONE | color_mode::RANDOM) && !m.name.eq_ignore_ascii_case("off");
+        own.then_some(m.name.as_str())
+    }
+
     /// The color most of its lit LEDs show, or `None` when every LED is off
     /// (black), it is in its "Off" mode, or it has none. A mode with colors of
     /// its own, such as Static, shows those rather than each light's own.
@@ -243,7 +253,8 @@ impl Device {
     /// keys still reports those keys' color.
     pub fn lit_color(&self) -> Option<Rgb> {
         let active = self.active();
-        if active.is_some_and(|m| m.name.eq_ignore_ascii_case("off")) {
+        // Off shows nothing; a mode of its own shows colors OpenRGB can't see.
+        if active.is_some_and(|m| m.name.eq_ignore_ascii_case("off")) || self.own_lighting().is_some() {
             return None;
         }
         let shown = match active {
@@ -410,6 +421,15 @@ mod tests {
         off.modes.push(Mode { name: "Off".into(), ..Mode::default() });
         off.active_mode = Some(3);
         assert_eq!(off.lit_color(), None);
+    }
+
+    #[test]
+    fn a_mode_of_its_own_hides_stale_colors() {
+        let mut kb = testing::keyboard(RED);
+        assert_eq!(kb.own_lighting(), None);
+        kb.active_mode = Some(1);
+        assert_eq!(kb.own_lighting(), Some("Onboard"));
+        assert_eq!(kb.lit_color(), None, "the red OpenRGB still reports is stale");
     }
 
     #[test]
