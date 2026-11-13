@@ -5,18 +5,25 @@
 //! size. Strings are a `u16` length that counts a trailing NUL, then the bytes.
 
 use super::SdkError;
+use crate::device::{Mode, Rgb};
 
 pub const MAGIC: &[u8; 4] = b"ORGB";
 pub const HEADER_LEN: usize = 16;
 
-/// Packet ids Keeplight sends or expects. Ids that change lights are left out
-/// on purpose until a stage needs them.
+/// Packet ids Keeplight sends or expects. Of the requests that change lights,
+/// only the two that set one device's mode and colors are here; profile
+/// loading and saving to a device's own memory are left out on purpose
+/// (`docs/safety-model.md`).
 pub mod packet {
     pub const REQUEST_CONTROLLER_COUNT: u32 = 0;
     pub const REQUEST_CONTROLLER_DATA: u32 = 1;
     pub const REQUEST_PROTOCOL_VERSION: u32 = 40;
     pub const SET_CLIENT_NAME: u32 = 50;
     pub const DEVICE_LIST_UPDATED: u32 = 100;
+    /// Sets every light on one device; no reply.
+    pub const UPDATE_LEDS: u32 = 1050;
+    /// Switches one device to a mode with the given settings; no reply.
+    pub const UPDATE_MODE: u32 = 1101;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +56,84 @@ pub fn c_string(text: &str) -> Vec<u8> {
     let mut out = text.as_bytes().to_vec();
     out.push(0);
     out
+}
+
+/// Builds a little-endian payload; the counterpart of [`Reader`].
+#[derive(Default)]
+pub struct Writer {
+    bytes: Vec<u8>,
+}
+
+impl Writer {
+    pub fn u16(&mut self, v: u16) -> &mut Self {
+        self.bytes.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+
+    pub fn u32(&mut self, v: u32) -> &mut Self {
+        self.bytes.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+
+    pub fn i32(&mut self, v: i32) -> &mut Self {
+        self.bytes.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+
+    /// A `u16` length counting the trailing NUL, then the bytes and the NUL.
+    pub fn string(&mut self, text: &str) -> &mut Self {
+        self.u16((text.len() + 1) as u16);
+        self.bytes.extend_from_slice(text.as_bytes());
+        self.bytes.push(0);
+        self
+    }
+
+    pub fn colors(&mut self, colors: &[Rgb]) -> &mut Self {
+        self.u16(colors.len() as u16);
+        for c in colors {
+            self.u32(c.to_wire());
+        }
+        self
+    }
+
+    pub fn mode(&mut self, m: &Mode, protocol: u32) -> &mut Self {
+        self.string(&m.name).i32(m.value).u32(m.flags).u32(m.speed_min).u32(m.speed_max);
+        if protocol >= 3 {
+            self.u32(m.brightness_min).u32(m.brightness_max);
+        }
+        self.u32(m.colors_min).u32(m.colors_max).u32(m.speed);
+        if protocol >= 3 {
+            self.u32(m.brightness);
+        }
+        self.u32(m.direction).u32(m.color_mode).colors(&m.colors)
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    /// The bytes with a leading `u32` total size that counts itself, as the
+    /// `UPDATE_LEDS` and `UPDATE_MODE` payloads start.
+    pub fn into_sized(self) -> Vec<u8> {
+        let size = (self.bytes.len() + 4) as u32;
+        let mut out = size.to_le_bytes().to_vec();
+        out.extend(self.bytes);
+        out
+    }
+}
+
+/// `UPDATE_LEDS`: one color for every light on the device, in order.
+pub fn update_leds(colors: &[Rgb]) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.colors(colors);
+    w.into_sized()
+}
+
+/// `UPDATE_MODE`: the mode's index on the device, then the mode itself.
+pub fn update_mode(index: usize, mode: &Mode, protocol: u32) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.i32(index as i32).mode(mode, protocol);
+    w.into_sized()
 }
 
 /// Reads little-endian fields from a payload, failing cleanly when it ends
@@ -122,6 +207,29 @@ mod tests {
         let mut bytes = 4u16.to_le_bytes().to_vec();
         bytes.extend_from_slice(b"RAM\0");
         assert_eq!(Reader::new(&bytes).string().unwrap(), "RAM");
+    }
+
+    #[test]
+    fn update_leds_counts_its_own_size() {
+        let red = Rgb { r: 255, g: 0, b: 0 };
+        let bytes = update_leds(&[red, red]);
+        let mut r = Reader::new(&bytes);
+        assert_eq!(r.u32().unwrap() as usize, bytes.len());
+        assert_eq!(r.u16().unwrap(), 2);
+        assert_eq!(r.u32().unwrap(), 0x0000ff);
+    }
+
+    #[test]
+    fn update_mode_carries_the_index_then_the_mode() {
+        let mode = Mode { name: "Static".into(), value: 1, color_mode: 2, ..Mode::default() };
+        let bytes = update_mode(4, &mode, 3);
+        let mut r = Reader::new(&bytes);
+        assert_eq!(r.u32().unwrap() as usize, bytes.len());
+        assert_eq!(r.i32().unwrap(), 4);
+        assert_eq!(r.string().unwrap(), "Static");
+        // name, value, flags, 10 words at protocol 3, then no colors.
+        assert_eq!(bytes.len(), 4 + 4 + (2 + 7) + 4 + 4 + 40 + 2);
+        assert_eq!(update_mode(4, &mode, 2).len(), bytes.len() - 12);
     }
 
     #[test]

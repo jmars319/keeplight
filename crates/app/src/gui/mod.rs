@@ -1,10 +1,16 @@
-//! The main window. Stage 1 is read-only: it lists every light OpenRGB
-//! reports, refreshing every few seconds, and changes none of them.
+//! The main window. It lists every light OpenRGB reports, refreshing every
+//! few seconds. Keep saves what a device shows into the setup; Put back sends
+//! a device its kept setup. Both run in `keeplight_core::keep`; this module
+//! only passes requests to it and shows the results.
 
 mod view;
 
+use std::path::Path;
 use std::rc::Rc;
+use std::sync::mpsc;
 use std::time::Duration;
+
+use keeplight_core::keep::{self, Outcome, Setup};
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
@@ -26,20 +32,41 @@ pub fn run() -> i32 {
     g.set_version(env!("CARGO_PKG_VERSION").into());
     g.set_devices(ModelRc::from(rows.clone()));
 
-    // OpenRGB can take seconds to answer while it scans, so it is read on a
-    // worker thread and only the result comes back to the window.
+    // OpenRGB can take seconds to answer while it scans, so it is read, and
+    // every action runs, on a worker thread; only the result comes back to the
+    // window.
+    let (tx, rx) = mpsc::channel::<Command>();
     let address = crate::platform::openrgb_address();
+    let setup_path = crate::platform::setup_path();
     let weak = ui.as_weak();
     std::thread::spawn(move || {
+        let mut notice: Option<view::Notice> = None;
         loop {
             let result = keeplight_core::sdk::snapshot(&address).map_err(|e| e.to_string());
-            let v = view::build(&result, &address);
+            let setup = Setup::load(&setup_path).map_err(|e| e.to_string());
+            let v = view::build(&result, &setup, &address, notice.as_ref());
             if weak.upgrade_in_event_loop(move |ui| apply(&ui, v)).is_err() {
                 return;
             }
-            std::thread::sleep(REFRESH);
+            match rx.recv_timeout(REFRESH) {
+                Ok(command) => notice = Some(run_command(&command, &address, &setup_path)),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
         }
     });
+    let send = |make: fn(DeviceRow) -> Command| {
+        let tx = tx.clone();
+        let weak = ui.as_weak();
+        move |row: DeviceRow| {
+            if let Some(ui) = weak.upgrade() {
+                ui.global::<Ui>().set_busy(true);
+            }
+            let _ = tx.send(make(row));
+        }
+    };
+    g.on_keep(send(Command::Keep));
+    g.on_put_back(send(Command::PutBack));
 
     let _repaint = repaint_after_restore(&ui);
     match ui.run() {
@@ -51,8 +78,39 @@ pub fn run() -> i32 {
     }
 }
 
+/// A button press, carrying the row it came from.
+enum Command {
+    Keep(DeviceRow),
+    PutBack(DeviceRow),
+}
+
+fn run_command(command: &Command, address: &str, setup_path: &Path) -> view::Notice {
+    let note = |text: String, warn: bool| view::Notice { text, warn };
+    match command {
+        Command::Keep(row) => match keep::keep_now(address, setup_path, &row.name_key, &row.location_key) {
+            Ok(_) => note(format!("Kept {}. Put back returns it to what it shows now.", row.name), false),
+            Err(e) => note(format!("Couldn't keep {}. {e}", row.name), true),
+        },
+        Command::PutBack(row) => match keep::put_back_now(address, setup_path, &row.name_key, &row.location_key) {
+            Ok(Outcome::Held) => note(format!("Put {} back.", row.name), false),
+            Ok(Outcome::NotHeld) => note(
+                format!(
+                    "Sent {} its kept setup, but it reads back as something else. Another program may be                      setting it, or it can't show that setup.",
+                    row.name
+                ),
+                true,
+            ),
+            Ok(Outcome::Skipped(reason)) => note(format!("Didn't change {}: {reason}.", row.name), true),
+            Err(e) => note(format!("Couldn't put {} back. {e}", row.name), true),
+        },
+    }
+}
+
 fn apply(ui: &AppWindow, v: view::View) {
     let g = ui.global::<Ui>();
+    g.set_busy(false);
+    g.set_notice(v.notice.into());
+    g.set_notice_warn(v.notice_warn);
     g.set_screen(match v.screen {
         view::Screen::Devices => "devices".into(),
         view::Screen::Message => "message".into(),
@@ -66,6 +124,11 @@ fn apply(ui: &AppWindow, v: view::View) {
         .rows
         .into_iter()
         .map(|r| DeviceRow {
+            name_key: r.name_key.into(),
+            location_key: r.location_key.into(),
+            status: r.status.as_str().into(),
+            status_text: r.status_text.into(),
+            can_keep: r.can_keep,
             name: r.name.into(),
             product: r.product.into(),
             meta: r.meta.into(),

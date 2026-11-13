@@ -7,6 +7,13 @@ import { Palette, ScrollView } from "std-widgets.slint";
 import { Button, Theme } from "theme.slint";
 
 export struct DeviceRow {
+    // Product name and location: how the actions find the device again.
+    name-key: string,
+    location-key: string,
+    // "", "kept", "differs" or "changed"
+    status: string,
+    status-text: string,
+    can-keep: bool,
     name: string,
     product: string,
     meta: string,
@@ -27,6 +34,13 @@ export global Ui {
     in property <string> message;
     in property <string> summary;
     in property <[DeviceRow]> devices;
+    // The last action's result, or a problem with the saved setup.
+    in property <string> notice;
+    in property <bool> notice-warn;
+    // True from a button press until the window next refreshes.
+    in-out property <bool> busy;
+    callback keep(DeviceRow);
+    callback put-back(DeviceRow);
 }
 
 component Chip inherits Rectangle {
@@ -72,7 +86,8 @@ component DeviceRowView inherits Rectangle {
     accessible-role: list-item;
     accessible-label: root.item.name + ", " + root.item.product + ", " + root.item.meta
         + (root.item.lit ? "" : ", all lights off")
-        + (root.item.note != "" ? ". " + root.item.note : "");
+        + (root.item.note != "" ? ". " + root.item.note : "")
+        + (root.item.status-text != "" ? ". " + root.item.status-text : "");
 
     content := HorizontalLayout {
         padding-left: 16px;
@@ -134,6 +149,31 @@ component DeviceRowView inherits Rectangle {
                 wrap: word-wrap;
                 accessible-role: none;
             }
+            if root.item.status-text != "": Text {
+                text: root.item.status-text;
+                font-size: 12px;
+                color: root.item.status == "kept" ? Theme.ready
+                    : root.item.status == "" ? Theme.secondary-text : Theme.warning;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 6px;
+            if root.item.status == "differs": Button {
+                text: "Put back";
+                primary: true;
+                enabled: !Ui.busy;
+                accessible-label: "Put back " + root.item.name;
+                clicked => { Ui.put-back(root.item); }
+            }
+            if root.item.status != "kept": Button {
+                text: root.item.status == "" ? "Keep this" : "Keep this instead";
+                enabled: root.item.can-keep && !Ui.busy;
+                accessible-label: (root.item.status == "" ? "Keep " : "Keep what this shows now, ") + root.item.name;
+                clicked => { Ui.keep(root.item); }
+            }
         }
     }
 }
@@ -189,6 +229,13 @@ export component AppWindow inherits Window {
                     font-size: 12px;
                     color: Theme.secondary-text;
                 }
+                if Ui.notice != "": Text {
+                    text: Ui.notice;
+                    font-size: 12px;
+                    color: Ui.notice-warn ? Theme.warning : Theme.ready;
+                    wrap: word-wrap;
+                    accessible-role: text;
+                }
             }
             VerticalLayout {
                 alignment: center;
@@ -240,7 +287,7 @@ export component AppWindow inherits Window {
             padding-top: 8px;
             padding-bottom: 12px;
             Text {
-                text: "Read-only for now: Keeplight has not changed any light. Version " + Ui.version + ".";
+                text: "Keeplight changes a light only when you press Put back. Putting kept lights back by itself comes next. Version " + Ui.version + ".";
                 font-size: 11px;
                 color: Theme.secondary-text;
                 wrap: word-wrap;
