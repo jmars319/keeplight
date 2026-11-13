@@ -29,6 +29,12 @@ $A = [System.Windows.Automation.AutomationElement]
 $work = Join-Path ([IO.Path]::GetTempPath()) "keeplight-clicks-$PID"
 New-Item -ItemType Directory -Force $work | Out-Null
 $setup = Join-Path $work 'setup.json'
+# The sign-in switch writes this throwaway startup entry instead of the real
+# "Keeplight" one, which must come through unchanged.
+$run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$entry = "Keeplight-smoke-$PID"
+function Entry($name) { (Get-ItemProperty -Path $run -Name $name -ErrorAction SilentlyContinue).$name }
+$realBefore = Entry 'Keeplight'
 
 # The fake server prints its address on its first line.
 $fpsi = [System.Diagnostics.ProcessStartInfo]::new((Resolve-Path $Fake))
@@ -45,6 +51,7 @@ try {
     $psi = [System.Diagnostics.ProcessStartInfo]::new((Resolve-Path $Exe))
     $psi.Environment['KEEPLIGHT_OPENRGB'] = $address
     $psi.Environment['KEEPLIGHT_DATA'] = $work
+    $psi.Environment['KEEPLIGHT_STARTUP_NAME'] = $entry
     $p = [System.Diagnostics.Process]::Start($psi)
 
     $h = [IntPtr]::Zero
@@ -110,7 +117,13 @@ try {
     Check 'button: Keep turns into a Kept status' (Eventually { -not (Has 'Keep RAM stick 2') })
     Click 'Keep Keyboard'
     Check 'button: a second Keep adds the keyboard' (Eventually { (Kept).Count -eq 2 })
+    Click 'Put kept lights back when you sign in'
+    Check 'switch: on registers this exe with --keep' (Eventually { (Entry $entry) -like '*keeplight.exe" --keep' })
+    Click 'Put kept lights back when you sign in'
+    Check 'switch: off removes the entry' (Eventually { $null -eq (Entry $entry) })
+    Check 'the real startup entry is untouched' ((Entry 'Keeplight') -eq $realBefore)
 } finally {
+    Remove-ItemProperty -Path $run -Name $entry -ErrorAction SilentlyContinue
     if ($p -and -not $p.HasExited) { $p.Kill(); $p.WaitForExit() }
     if (-not $server.HasExited) { $server.Kill(); $server.WaitForExit() }
 }

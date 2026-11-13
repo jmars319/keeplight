@@ -7,6 +7,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -266,6 +267,64 @@ pub fn put_back_now(address: &str, setup_path: &Path, name: &str, location: &str
     Ok(put_back(&mut client, kept, &device)?)
 }
 
+/// One kept device's result in [`put_back_all`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Report {
+    pub name: String,
+    pub location: String,
+    /// What happened, or why it couldn't be tried, such as the device not
+    /// being listed.
+    pub result: Result<Outcome, String>,
+}
+
+/// The result of putting back every kept device.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Run {
+    pub reports: Vec<Report>,
+    /// How long it waited for OpenRGB to list every kept device.
+    pub waited: Duration,
+}
+
+impl Run {
+    pub fn held(&self) -> usize {
+        self.reports.iter().filter(|r| r.result == Ok(Outcome::Held)).count()
+    }
+}
+
+/// Puts back every device in the setup at `setup_path`, as the keeper does at
+/// sign-in. OpenRGB may still be starting, or still finding devices, so it
+/// retries every `poll` until it lists every kept device or `wait` runs out,
+/// then puts back what it found. Devices that are not kept are never sent
+/// anything. An empty setup sends nothing and connects to nothing.
+pub fn put_back_all(address: &str, setup_path: &Path, wait: Duration, poll: Duration) -> Result<Run, ActionError> {
+    let setup = Setup::load(setup_path)?;
+    if setup.devices.is_empty() {
+        return Ok(Run::default());
+    }
+    let start = Instant::now();
+    let (mut client, devices) = loop {
+        let attempt = Client::connect(address).and_then(|mut c| c.snapshot().map(|s| (c, s.devices)));
+        let out_of_time = start.elapsed() + poll > wait;
+        match attempt {
+            Ok((c, devices)) if out_of_time || setup.devices.iter().all(|k| devices.iter().any(|d| k.is_for(d))) => {
+                break (c, devices);
+            }
+            Err(e) if out_of_time => return Err(e.into()),
+            _ => std::thread::sleep(poll),
+        }
+    };
+    let waited = start.elapsed();
+    let mut reports = Vec::new();
+    for kept in &setup.devices {
+        let result = match devices.iter().find(|d| kept.is_for(d)) {
+            Some(device) => put_back(&mut client, kept, device).map_err(|e| e.to_string()),
+            None => Err("OpenRGB doesn't list it".to_string()),
+        };
+        reports.push(Report { name: kept.name.clone(), location: kept.location.clone(), result });
+    }
+    Ok(Run { reports, waited })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,6 +551,82 @@ mod tests {
         let server = FakeServer::start(vec![testing::ram("SMBus 0x71")]);
         assert!(matches!(keep_now(&server.address, &path, "ENE DRAM", "SMBus 0x71"), Err(ActionError::Setup(_))));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+
+    const QUICK: Duration = Duration::from_millis(20);
+
+    #[test]
+    fn put_back_all_restores_every_kept_device_and_nothing_else() {
+        let path = temp_path("all");
+        let mut setup = Setup::default();
+        setup.keep(Kept::capture(&testing::ram("SMBus 0x71")).unwrap());
+        setup.keep(Kept::capture(&testing::ram("SMBus 0x73")).unwrap());
+        setup.save(&path).unwrap();
+        let server =
+            FakeServer::start(vec![rainbow_ram("SMBus 0x71"), testing::keyboard(BLUE), rainbow_ram("SMBus 0x73")]);
+
+        let run = put_back_all(&server.address, &path, Duration::from_secs(1), QUICK).unwrap();
+        assert_eq!(run.reports.len(), 2);
+        assert_eq!(run.held(), 2);
+        assert_eq!(server.device(0).active_mode_name(), Some("Chase Fade"));
+        assert_eq!(server.device(2).active_mode_name(), Some("Chase Fade"));
+        assert_eq!(server.device(1), Device { index: 1, ..testing::keyboard(BLUE) }, "the keyboard isn't kept");
+        let to_keyboard = server
+            .state
+            .lock()
+            .unwrap()
+            .seen
+            .iter()
+            .any(|&(id, dev)| dev == 1 && [packet::UPDATE_MODE, packet::UPDATE_LEDS].contains(&id));
+        assert!(!to_keyboard);
+    }
+
+    #[test]
+    fn put_back_all_waits_for_a_device_that_shows_up_late() {
+        let path = temp_path("late");
+        let mut setup = Setup::default();
+        setup.keep(Kept::capture(&testing::ram("SMBus 0x73")).unwrap());
+        setup.save(&path).unwrap();
+        let server = FakeServer::start(vec![rainbow_ram("SMBus 0x71")]);
+        let state = server.state.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            state.lock().unwrap().devices.push(Device { index: 1, ..rainbow_ram("SMBus 0x73") });
+        });
+        let run = put_back_all(&server.address, &path, Duration::from_secs(3), QUICK).unwrap();
+        assert_eq!(run.held(), 1);
+        assert!(run.waited >= Duration::from_millis(100));
+    }
+
+    #[test]
+    fn put_back_all_reports_a_device_that_never_shows_up() {
+        let path = temp_path("missing");
+        let mut setup = Setup::default();
+        setup.keep(Kept::capture(&testing::ram("SMBus 0x71")).unwrap());
+        setup.keep(Kept::capture(&testing::ram("SMBus 0x75")).unwrap());
+        setup.save(&path).unwrap();
+        let server = FakeServer::start(vec![rainbow_ram("SMBus 0x71")]);
+        let run = put_back_all(&server.address, &path, Duration::from_millis(200), QUICK).unwrap();
+        assert_eq!(run.held(), 1);
+        assert!(run.reports[1].result.as_ref().unwrap_err().contains("doesn't list"));
+    }
+
+    #[test]
+    fn put_back_all_with_nothing_kept_contacts_nothing() {
+        let path = temp_path("empty");
+        // Port 9 on loopback is never OpenRGB; an attempt would fail the test.
+        let run = put_back_all("127.0.0.1:9", &path, Duration::from_millis(50), QUICK).unwrap();
+        assert!(run.reports.is_empty());
+    }
+
+    #[test]
+    fn put_back_all_gives_up_when_openrgb_never_answers() {
+        let path = temp_path("no-server");
+        let mut setup = Setup::default();
+        setup.keep(Kept::capture(&testing::ram("SMBus 0x71")).unwrap());
+        setup.save(&path).unwrap();
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+        assert!(matches!(put_back_all(&closed, &path, Duration::from_millis(100), QUICK), Err(ActionError::Sdk(_))));
     }
 
     #[test]

@@ -18,7 +18,9 @@ Early development, nothing released yet. Stage 02, the keeper, is being built:
 - **Keep this** saves what a device shows now into Keeplight's own setup file. Set colors in OpenRGB first; a color picker comes in a later stage.
 - **Put back** appears when a kept device shows something else, and sends that one device its kept mode and colors.
 
-Putting kept devices back by itself, at sign-in, on wake and when a device reconnects, comes next. See the plan page.
+- **Put kept lights back when you sign in** turns on a startup entry that runs `keeplight --keep`, which puts every kept device back with no window and logs what it did to `%LOCALAPPDATA%\Keeplight\keeper.log`. Off until you turn it on.
+
+Putting kept devices back after sleep and when a device reconnects comes next. See the plan page.
 
 ## Build from source
 
@@ -29,7 +31,7 @@ cargo test --workspace
 cargo run -p keeplight
 ```
 
-Set `KEEPLIGHT_OPENRGB` to another `host:port` to point Keeplight at a different SDK server, such as a test one, and `KEEPLIGHT_DATA` to another folder for the setup file.
+Set `KEEPLIGHT_OPENRGB` to another `host:port` to point Keeplight at a different SDK server, such as a test one, and `KEEPLIGHT_DATA` to another folder for the setup file and log.
 
 `cargo run -p keeplight-core --features testing --example fake-openrgb` starts a fake SDK server with two RAM sticks and a keyboard and prints its address. `scripts/smoke-mouse-clicks.ps1` clicks the real window's buttons against it (CI runs it too).
 
@@ -39,7 +41,7 @@ Releases: a `v*` tag builds those into a draft GitHub release. Publishing the dr
 
 ## Safety
 
-[docs/safety-model.md](docs/safety-model.md) lists every request Keeplight sends to OpenRGB and the one file it writes. It changes a light only when you press Put back, and only that device.
+[docs/safety-model.md](docs/safety-model.md) lists every request Keeplight sends to OpenRGB and the one file it writes. It changes a light only when you press Put back (that device only) or at sign-in when you turned that on (kept devices only).
 
 ## License
 

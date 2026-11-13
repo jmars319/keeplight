@@ -52,5 +52,17 @@ Name: "{autodesktop}\Keeplight"; Filename: "{app}\keeplight.exe"; IconFilename: 
 [Run]
 Filename: "{app}\keeplight.exe"; Description: "Open Keeplight"; Flags: nowait postinstall skipifsilent
 
-; This version writes nothing outside its install folder, so uninstall has
-; nothing else to clean up.
+[UninstallRun]
+; Stops a keeper that is still putting lights back, so its exe can be removed.
+Filename: "{sys}\taskkill.exe"; Parameters: "/f /im keeplight.exe"; Flags: runhidden; RunOnceId: "StopKeeplight"
+
+[Code]
+// The app's "Put kept lights back when you sign in" switch writes a per-user
+// startup entry. Uninstalling removes it, so nothing tries to start a missing
+// exe at the next sign-in. The setup file and log in %LOCALAPPDATA%\Keeplight
+// are left, so a reinstall keeps what you chose.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Keeplight');
+end;
