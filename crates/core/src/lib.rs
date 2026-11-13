@@ -10,6 +10,7 @@
 pub mod device;
 pub mod keep;
 pub mod keeper;
+pub mod lit_by;
 pub mod sdk;
 pub mod settings;
 

@@ -20,6 +20,8 @@ public static class SmokeClicks {
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref POINT p);
   [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int hh, bool r);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v);
 }
 "@
@@ -77,16 +79,36 @@ try {
         for ($k = 0; $k -lt 12; $k++) { if (& $test) { return $true }; Start-Sleep -Milliseconds 500 }
         $false
     }
+    # Turns the mouse wheel over the device list. Slint doesn't expose controls
+    # scrolled out of view, so a control below the fold has to be scrolled to.
+    function Wheel([int] $notches) {
+        $wr = New-Object SmokeClicks+RECT
+        [SmokeClicks]::GetWindowRect($h, [ref]$wr) | Out-Null
+        $x = [int](($wr.L + $wr.R) / 2); $y = [int]($wr.T + ($wr.B - $wr.T) * 0.7)
+        $l = [IntPtr](($y -shl 16) -bor ($x -band 0xffff))
+        # winit scrolls what the pointer was last over, so move it over the list first.
+        $pt = New-Object SmokeClicks+POINT; $pt.X = $x; $pt.Y = $y
+        [SmokeClicks]::ScreenToClient($h, [ref]$pt) | Out-Null
+        $cl = [IntPtr](($pt.Y -shl 16) -bor ($pt.X -band 0xffff))
+        [SmokeClicks]::PostMessage($h, 0x0200, [IntPtr]0, $cl) | Out-Null   # WM_MOUSEMOVE
+        Start-Sleep -Milliseconds 100
+        $w = [IntPtr]((-120 * $notches) -shl 16)                            # WHEEL_DELTA per notch, down
+        [SmokeClicks]::PostMessage($h, 0x020A, $w, $l) | Out-Null           # WM_MOUSEWHEEL, screen coordinates
+        Start-Sleep -Milliseconds 400
+    }
     function Click($name) {
-        # Wait until the control is laid out where it will stay.
+        # Wait until the control is laid out where it will stay, scrolling the
+        # list down when it isn't in view.
         $b = $null
         $e = $null
-        for ($k = 0; $k -lt 10; $k++) {
+        for ($k = 0; $k -lt 16; $k++) {
             $e = All | Where-Object { $_.Current.Name -eq $name } | Select-Object -First 1
             if ($e) {
                 $r = $e.Current.BoundingRectangle
                 if ($b -and $r -eq $b -and $r.Width -gt 0) { break }
                 $b = $r
+            } elseif ($k -ge 3) {
+                Wheel 3
             }
             Start-Sleep -Milliseconds 300
         }

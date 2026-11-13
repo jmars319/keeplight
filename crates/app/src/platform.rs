@@ -11,6 +11,30 @@ pub fn openrgb_address() -> String {
         .unwrap_or_else(|| keeplight_core::sdk::DEFAULT_ADDRESS.to_string())
 }
 
+/// The names of running programs, in lower case, such as "lghub_agent.exe",
+/// for guessing which lighting app lights a device. Reading the list needs no
+/// admin rights; an empty list on failure only makes the guess vaguer.
+#[cfg(windows)]
+pub fn running_programs() -> Vec<String> {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+    };
+    let mut names = Vec::new();
+    // SAFETY: a process snapshot read entry by entry, then closed.
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return names };
+        let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        let mut more = Process32FirstW(snapshot, &mut entry).is_ok();
+        while more {
+            let end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+            names.push(String::from_utf16_lossy(&entry.szExeFile[..end]).to_lowercase());
+            more = Process32NextW(snapshot, &mut entry).is_ok();
+        }
+        let _ = windows::Win32::Foundation::CloseHandle(snapshot);
+    }
+    names
+}
+
 /// Keeplight's preferences, beside the setup file.
 pub fn settings_path() -> std::path::PathBuf {
     setup_path().with_file_name("settings.json")

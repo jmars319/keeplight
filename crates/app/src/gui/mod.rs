@@ -44,7 +44,8 @@ pub fn run() -> i32 {
         loop {
             let result = keeplight_core::sdk::snapshot(&address).map_err(|e| e.to_string());
             let setup = Setup::load(&setup_path).map_err(|e| e.to_string());
-            let mut v = view::build(&result, &setup, &address, notice.as_ref());
+            let running = crate::platform::running_programs();
+            let mut v = view::build(&result, &setup, &address, notice.as_ref(), &running);
             let kept = setup.as_ref().map_or(0, |s| s.devices.len());
             let this_exe = crate::platform::startup::command_for_this_exe().ok();
             (v.sign_in, v.sign_in_note) =
@@ -248,6 +249,8 @@ fn apply(ui: &AppWindow, v: view::View) {
             dark: r.dark,
             has_before: r.has_before,
             own_lighting: r.own_lighting,
+            lit_by: r.lit_by.into(),
+            lit_by_warn: r.lit_by_warn,
             name: r.name.into(),
             product: r.product.into(),
             meta: r.meta.into(),
