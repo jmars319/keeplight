@@ -88,20 +88,36 @@ pub enum Outcome {
     Skipped(String),
 }
 
+/// Whether every light on `device` is off: its "Off" mode, or a mode whose
+/// colors are all black. An effect with colors of its own lights up by itself.
+pub fn is_dark(device: &Device) -> bool {
+    let Some(mode) = device.active() else { return false };
+    if mode.name.eq_ignore_ascii_case("off") {
+        return true;
+    }
+    match mode.color_mode {
+        color_mode::PER_LED => device.colors.iter().all(|c| c.is_black()),
+        color_mode::MODE_SPECIFIC => mode.colors.iter().all(|c| c.is_black()),
+        _ => false,
+    }
+}
+
 impl Kept {
     /// What `device` shows right now, ready to keep. Refuses a device whose
-    /// lights are all off; keeping that would be keeping it dark.
+    /// lights are all off; keeping that would keep it dark, which only
+    /// [`Kept::capture_dark`] does, after asking.
     pub fn capture(device: &Device) -> Result<Kept, KeepError> {
-        let mode = device.active().ok_or(KeepError::NoMode)?;
-        let lit = match mode.color_mode {
-            color_mode::PER_LED => device.colors.iter().any(|c| !c.is_black()),
-            color_mode::MODE_SPECIFIC => mode.colors.iter().any(|c| !c.is_black()),
-            // An effect with its own colors lights up by itself.
-            _ => true,
-        };
-        if !lit {
+        if is_dark(device) {
             return Err(KeepError::AllOff);
         }
+        Self::capture_dark(device)
+    }
+
+    /// What `device` shows right now, even when every light is off. For a
+    /// front end that has asked first: keeping it means putting it back to
+    /// dark after every sleep.
+    pub fn capture_dark(device: &Device) -> Result<Kept, KeepError> {
+        let mode = device.active().ok_or(KeepError::NoMode)?;
         let colors = if mode.color_mode == color_mode::PER_LED { device.colors.clone() } else { Vec::new() };
         Ok(Kept {
             name: device.name.clone(),
@@ -239,23 +255,87 @@ pub enum ActionError {
     NotKept,
 }
 
+/// What happened to a device's lighting when Keeplight stopped keeping it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandBack {
+    /// It was in Direct mode, which shows nothing unless a program sends
+    /// colors, and now reads back in its own built-in mode, named here.
+    OwnLighting(String),
+    /// It was sent its own built-in mode, named first, but still reads back
+    /// as the second. It may be dark until set in OpenRGB or replugged.
+    NotTaken(String, String),
+    /// Nothing was sent: it isn't in Direct mode, or has no built-in mode to
+    /// go back to, so it keeps showing what it shows until it loses power.
+    LeftAsIs,
+    /// OpenRGB doesn't list it right now, so nothing was sent.
+    NotListed,
+}
+
+/// The device's own lighting, for handing it back: a mode named "Onboard",
+/// as the SteelSeries keyboard on this PC has.
+fn own_lighting(device: &Device) -> Option<usize> {
+    device.modes.iter().position(|m| m.name.eq_ignore_ascii_case("onboard"))
+}
+
 /// Finds a device by product name and location in a fresh read.
 fn find_device(client: &mut Client, name: &str, location: &str) -> Result<Device, ActionError> {
     let snapshot = client.snapshot()?;
     snapshot.devices.into_iter().find(|d| d.name == name && d.location == location).ok_or(ActionError::NotFound)
 }
 
+/// Whether a keep may save a device whose lights are all off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dark {
+    Refuse,
+    /// The front end asked first.
+    Allow,
+}
+
 /// Keeps what the named device shows right now: reads it fresh from OpenRGB
 /// at `address` and saves it into the setup at `setup_path`. Sends nothing
 /// that changes a light.
-pub fn keep_now(address: &str, setup_path: &Path, name: &str, location: &str) -> Result<Kept, ActionError> {
+pub fn keep_now(address: &str, setup_path: &Path, name: &str, location: &str, dark: Dark) -> Result<Kept, ActionError> {
     // Read the setup first, so an unreadable one is never saved over.
     let mut setup = Setup::load(setup_path)?;
     let mut client = Client::connect(address)?;
-    let kept = Kept::capture(&find_device(&mut client, name, location)?)?;
+    let device = find_device(&mut client, name, location)?;
+    let kept = match dark {
+        Dark::Refuse => Kept::capture(&device)?,
+        Dark::Allow => Kept::capture_dark(&device)?,
+    };
     setup.keep(kept.clone());
     setup.save(setup_path)?;
     Ok(kept)
+}
+
+/// Stops keeping the named device: removes it from the setup, then hands it
+/// back to its own lighting when it is in Direct mode and has a built-in mode
+/// to go back to. Sends that one device at most one `UPDATE_MODE`, with the
+/// built-in mode exactly as OpenRGB reported it.
+pub fn stop_keeping(address: &str, setup_path: &Path, name: &str, location: &str) -> Result<HandBack, ActionError> {
+    let mut setup = Setup::load(setup_path)?;
+    let before = setup.devices.len();
+    setup.devices.retain(|k| !(k.name == name && k.location == location));
+    if setup.devices.len() == before {
+        return Err(ActionError::NotKept);
+    }
+    setup.save(setup_path)?;
+
+    let mut client = Client::connect(address)?;
+    let device = match find_device(&mut client, name, location) {
+        Ok(d) => d,
+        Err(ActionError::NotFound) => return Ok(HandBack::NotListed),
+        Err(e) => return Err(e),
+    };
+    let in_direct = device.active_mode_name().is_some_and(|m| m.eq_ignore_ascii_case("direct"));
+    let Some(index) = own_lighting(&device).filter(|_| in_direct) else { return Ok(HandBack::LeftAsIs) };
+    let own = device.modes[index].clone();
+    client.update_mode(device.index, index, &own)?;
+    let after = client.controller(device.index)?;
+    Ok(match after.active_mode_name() {
+        Some(now) if now == own.name => HandBack::OwnLighting(own.name),
+        now => HandBack::NotTaken(own.name, now.unwrap_or("no mode").to_string()),
+    })
 }
 
 /// Puts the named device back to what is kept for it (see [`put_back`]).
@@ -396,6 +476,12 @@ mod tests {
         let mut off = testing::ram("SMBus");
         off.colors = vec![Rgb::default(); 8];
         assert_eq!(Kept::capture(&off), Err(KeepError::AllOff));
+        let mut switched_off = testing::ram("SMBus");
+        switched_off.modes.push(Mode { name: "Off".into(), ..Mode::default() });
+        switched_off.active_mode = Some(3);
+        assert!(is_dark(&switched_off), "the Off mode is dark even though it has no colors");
+        assert_eq!(Kept::capture(&switched_off), Err(KeepError::AllOff));
+        assert_eq!(Kept::capture_dark(&switched_off).unwrap().mode.name, "Off", "unless asked first");
     }
 
     #[test]
@@ -543,7 +629,7 @@ mod tests {
     fn keep_now_and_put_back_now_work_by_name_and_location() {
         let path = temp_path("actions");
         let server = FakeServer::start(vec![testing::ram("SMBus 0x71"), testing::keyboard(RED)]);
-        let kept = keep_now(&server.address, &path, "ENE DRAM", "SMBus 0x71").unwrap();
+        let kept = keep_now(&server.address, &path, "ENE DRAM", "SMBus 0x71", Dark::Refuse).unwrap();
         assert_eq!(kept.mode.name, "Chase Fade");
         assert_eq!(Setup::load(&path).unwrap().devices, [kept]);
         assert!(!server.seen_ids().contains(&packet::UPDATE_MODE), "keeping changes no light");
@@ -552,7 +638,67 @@ mod tests {
         assert_eq!(put_back_now(&server.address, &path, "ENE DRAM", "SMBus 0x71").unwrap(), Outcome::Held);
         assert_eq!(server.device(0).active_mode_name(), Some("Chase Fade"));
         assert!(matches!(put_back_now(&server.address, &path, "Apex", "HID: keyboard"), Err(ActionError::NotKept)));
-        assert!(matches!(keep_now(&server.address, &path, "Gone", "nowhere"), Err(ActionError::NotFound)));
+        assert!(matches!(
+            keep_now(&server.address, &path, "Gone", "nowhere", Dark::Refuse),
+            Err(ActionError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn keeping_a_dark_device_needs_the_front_end_to_have_asked() {
+        let path = temp_path("dark");
+        let server = FakeServer::start(vec![testing::keyboard(Rgb::default())]);
+        assert!(matches!(
+            keep_now(&server.address, &path, "Apex", "HID: keyboard", Dark::Refuse),
+            Err(ActionError::Keep(KeepError::AllOff))
+        ));
+        let kept = keep_now(&server.address, &path, "Apex", "HID: keyboard", Dark::Allow).unwrap();
+        assert!(kept.colors.iter().all(|c| c.is_black()));
+    }
+
+    #[test]
+    fn stopping_hands_a_direct_keyboard_back_to_its_own_lighting() {
+        let path = temp_path("stop");
+        let server = FakeServer::start(vec![testing::ram("SMBus 0x71"), testing::keyboard(RED)]);
+        keep_now(&server.address, &path, "ENE DRAM", "SMBus 0x71", Dark::Refuse).unwrap();
+        keep_now(&server.address, &path, "Apex", "HID: keyboard", Dark::Refuse).unwrap();
+
+        let back = stop_keeping(&server.address, &path, "Apex", "HID: keyboard").unwrap();
+        assert_eq!(back, HandBack::OwnLighting("Onboard".into()));
+        assert_eq!(server.device(1).active_mode_name(), Some("Onboard"));
+        assert_eq!(Setup::load(&path).unwrap().devices.len(), 1, "only the keyboard left the setup");
+
+        // RAM has no built-in mode to go back to: removed, nothing sent.
+        let writes_before = server.seen_ids().iter().filter(|&&id| id == packet::UPDATE_MODE).count();
+        assert_eq!(stop_keeping(&server.address, &path, "ENE DRAM", "SMBus 0x71").unwrap(), HandBack::LeftAsIs);
+        let writes_after = server.seen_ids().iter().filter(|&&id| id == packet::UPDATE_MODE).count();
+        assert_eq!(writes_before, writes_after);
+        assert!(Setup::load(&path).unwrap().devices.is_empty());
+        assert!(matches!(stop_keeping(&server.address, &path, "ENE DRAM", "SMBus 0x71"), Err(ActionError::NotKept)));
+    }
+
+    #[test]
+    fn a_keyboard_that_ignores_the_hand_back_is_reported() {
+        let path = temp_path("stop-stuck");
+        let server = FakeServer::start(vec![testing::keyboard(RED)]);
+        keep_now(&server.address, &path, "Apex", "HID: keyboard", Dark::Refuse).unwrap();
+        server.state.lock().unwrap().stuck.push(0);
+        assert_eq!(
+            stop_keeping(&server.address, &path, "Apex", "HID: keyboard").unwrap(),
+            HandBack::NotTaken("Onboard".into(), "Direct".into())
+        );
+        assert!(Setup::load(&path).unwrap().devices.is_empty(), "it stops being kept either way");
+    }
+
+    #[test]
+    fn stopping_a_device_openrgb_no_longer_lists_still_removes_it() {
+        let path = temp_path("stop-gone");
+        let mut setup = Setup::default();
+        setup.keep(Kept::capture(&testing::keyboard(RED)).unwrap());
+        setup.save(&path).unwrap();
+        let server = FakeServer::start(vec![]);
+        assert_eq!(stop_keeping(&server.address, &path, "Apex", "HID: keyboard").unwrap(), HandBack::NotListed);
+        assert!(Setup::load(&path).unwrap().devices.is_empty());
     }
 
     #[test]
@@ -561,7 +707,10 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{ not json").unwrap();
         let server = FakeServer::start(vec![testing::ram("SMBus 0x71")]);
-        assert!(matches!(keep_now(&server.address, &path, "ENE DRAM", "SMBus 0x71"), Err(ActionError::Setup(_))));
+        assert!(matches!(
+            keep_now(&server.address, &path, "ENE DRAM", "SMBus 0x71", Dark::Refuse),
+            Err(ActionError::Setup(_))
+        ));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
     }
 

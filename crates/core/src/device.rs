@@ -237,11 +237,21 @@ impl Device {
     }
 
     /// The color most of its lit LEDs show, or `None` when every LED is off
-    /// (black) or it has none. Off LEDs are left out of the count, so a
-    /// keyboard lit only on a few keys still reports those keys' color.
+    /// (black), it is in its "Off" mode, or it has none. A mode with colors of
+    /// its own, such as Static, shows those rather than each light's own.
+    /// Off LEDs are left out of the count, so a keyboard lit only on a few
+    /// keys still reports those keys' color.
     pub fn lit_color(&self) -> Option<Rgb> {
+        let active = self.active();
+        if active.is_some_and(|m| m.name.eq_ignore_ascii_case("off")) {
+            return None;
+        }
+        let shown = match active {
+            Some(m) if m.color_mode == color_mode::MODE_SPECIFIC => &m.colors,
+            _ => &self.colors,
+        };
         let mut counts: Vec<(Rgb, usize)> = Vec::new();
-        for c in self.colors.iter().filter(|c| !c.is_black()) {
+        for c in shown.iter().filter(|c| !c.is_black()) {
             match counts.iter_mut().find(|(k, _)| k == c) {
                 Some((_, n)) => *n += 1,
                 None => counts.push((*c, 1)),
@@ -388,6 +398,18 @@ mod tests {
         let mut d = testing::ram("USB");
         d.modes.push(Mode { name: "Static".into(), flags: flags::MANUAL_SAVE, ..Mode::default() });
         assert!(round_trip(&d).can_store_color());
+    }
+
+    #[test]
+    fn the_swatch_color_follows_the_mode() {
+        let mut board = testing::board();
+        assert_eq!(board.lit_color(), Some(RED));
+        board.modes[1].colors = vec![Rgb::default()];
+        assert_eq!(board.lit_color(), None, "black Static is dark even though each light still reads red");
+        let mut off = testing::ram("SMBus");
+        off.modes.push(Mode { name: "Off".into(), ..Mode::default() });
+        off.active_mode = Some(3);
+        assert_eq!(off.lit_color(), None);
     }
 
     #[test]
