@@ -22,11 +22,16 @@ pub const SETUP_VERSION: u32 = 1;
 pub struct Setup {
     pub version: u32,
     pub devices: Vec<Kept>,
+    /// What each device you stopped keeping was kept as, so "Keep it as
+    /// before" can bring it back. Never put back by the keeper. Absent in
+    /// setups written before this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub before: Vec<Kept>,
 }
 
 impl Default for Setup {
     fn default() -> Self {
-        Setup { version: SETUP_VERSION, devices: Vec::new() }
+        Setup { version: SETUP_VERSION, devices: Vec::new(), before: Vec::new() }
     }
 }
 
@@ -210,8 +215,15 @@ impl Setup {
         self.devices.iter().find(|k| k.is_for(device))
     }
 
+    /// What `device` was kept as before you stopped keeping it.
+    pub fn find_before(&self, device: &Device) -> Option<&Kept> {
+        self.before.iter().find(|k| k.is_for(device))
+    }
+
     /// Adds `kept`, replacing what was kept for the same device before.
     pub fn keep(&mut self, kept: Kept) {
+        // Keeping it again replaces any remembered earlier setup.
+        self.before.retain(|k| !(k.name == kept.name && k.location == kept.location));
         match self.devices.iter_mut().find(|k| k.name == kept.name && k.location == kept.location) {
             Some(existing) => *existing = kept,
             None => self.devices.push(kept),
@@ -273,6 +285,8 @@ pub enum ActionError {
     NotFound,
     #[error("Nothing is kept for that device yet.")]
     NotKept,
+    #[error("There's no earlier setup to go back to for that device.")]
+    NothingBefore,
     #[error("Its lights came on while you were deciding, so nothing was kept. Press Keep this to keep what it shows.")]
     NoLongerDark,
 }
@@ -341,11 +355,13 @@ pub fn stop_keeping(address: &str, setup_path: &Path, name: &str, location: &str
     // Held through the hand-back, so a keeper run can't slip in between.
     let _lock = SetupLock::acquire(setup_path)?;
     let mut setup = Setup::load(setup_path)?;
-    let before = setup.devices.len();
-    setup.devices.retain(|k| !(k.name == name && k.location == location));
-    if setup.devices.len() == before {
+    let Some(at) = setup.devices.iter().position(|k| k.name == name && k.location == location) else {
         return Err(ActionError::NotKept);
-    }
+    };
+    // Remembered, so "Keep it as before" can bring it back.
+    let stopped = setup.devices.remove(at);
+    setup.before.retain(|k| !(k.name == name && k.location == location));
+    setup.before.push(stopped);
     setup.save(setup_path)?;
 
     let mut client = Client::connect(address)?;
@@ -373,6 +389,19 @@ pub fn put_back_now(address: &str, setup_path: &Path, name: &str, location: &str
     let device = find_device(&mut client, name, location)?;
     let kept = setup.find(&device).ok_or(ActionError::NotKept)?;
     Ok(put_back(&mut client, kept, &device)?)
+}
+
+/// Keeps the named device as it was kept before you stopped keeping it, and
+/// puts it back to that now (see [`put_back`]).
+pub fn keep_as_before(address: &str, setup_path: &Path, name: &str, location: &str) -> Result<Outcome, ActionError> {
+    let _lock = SetupLock::acquire(setup_path)?;
+    let mut setup = Setup::load(setup_path)?;
+    let mut client = Client::connect(address)?;
+    let device = find_device(&mut client, name, location)?;
+    let earlier = setup.find_before(&device).cloned().ok_or(ActionError::NothingBefore)?;
+    setup.keep(earlier.clone());
+    setup.save(setup_path)?;
+    Ok(put_back(&mut client, &earlier, &device)?)
 }
 
 /// One kept device's result in [`put_back_all`].
@@ -753,6 +782,53 @@ mod tests {
         assert_eq!(writes_before, writes_after);
         assert!(Setup::load(&path).unwrap().devices.is_empty());
         assert!(matches!(stop_keeping(&server.address, &path, "ENE DRAM", "SMBus 0x71"), Err(ActionError::NotKept)));
+    }
+
+    #[test]
+    fn keep_it_as_before_brings_back_what_was_stopped() {
+        let path = temp_path("before");
+        let server = FakeServer::start(vec![testing::keyboard(RED)]);
+        keep_now(&server.address, &path, "Apex", "HID: keyboard", Dark::Refuse).unwrap();
+        stop_keeping(&server.address, &path, "Apex", "HID: keyboard").unwrap();
+        assert_eq!(server.device(0).active_mode_name(), Some("Onboard"));
+        let setup = Setup::load(&path).unwrap();
+        assert!(setup.devices.is_empty() && setup.before.len() == 1, "remembered, not kept");
+
+        assert_eq!(keep_as_before(&server.address, &path, "Apex", "HID: keyboard").unwrap(), Outcome::Held);
+        assert_eq!(server.device(0).active_mode_name(), Some("Direct"));
+        assert_eq!(server.device(0).colors, vec![RED; 6], "red again");
+        let setup = Setup::load(&path).unwrap();
+        assert_eq!(setup.devices.len(), 1);
+        assert!(setup.before.is_empty(), "kept again, so nothing is remembered");
+        assert!(matches!(
+            keep_as_before(&server.address, &path, "Apex", "HID: keyboard"),
+            Err(ActionError::NothingBefore)
+        ));
+    }
+
+    #[test]
+    fn keeping_anew_forgets_the_earlier_setup_and_the_keeper_never_uses_it() {
+        let path = temp_path("before-forget");
+        let server = FakeServer::start(vec![testing::keyboard(RED)]);
+        keep_now(&server.address, &path, "Apex", "HID: keyboard", Dark::Refuse).unwrap();
+        stop_keeping(&server.address, &path, "Apex", "HID: keyboard").unwrap();
+        // The keeper runs: the remembered setup is not put back.
+        let run = put_back_all(&server.address, &path, Duration::from_millis(200), Duration::from_millis(20)).unwrap();
+        assert!(run.reports.is_empty());
+        assert_eq!(server.device(0).active_mode_name(), Some("Onboard"));
+        // Keeping what it shows now replaces the earlier setup.
+        keep_now(&server.address, &path, "Apex", "HID: keyboard", Dark::Refuse).unwrap();
+        let setup = Setup::load(&path).unwrap();
+        assert_eq!(setup.devices[0].mode.name, "Onboard");
+        assert!(setup.before.is_empty());
+    }
+
+    #[test]
+    fn setups_written_before_the_earlier_list_still_load() {
+        let path = temp_path("before-old");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{ "version": 1, "devices": [] }"#).unwrap();
+        assert_eq!(Setup::load(&path).unwrap(), Setup::default());
     }
 
     #[test]

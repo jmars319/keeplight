@@ -75,6 +75,7 @@ pub fn run() -> i32 {
     g.on_put_back(send(Command::PutBack));
     g.on_keep_dark(send(Command::KeepDark));
     g.on_stop_keeping(send(Command::StopKeeping));
+    g.on_keep_as_before(send(Command::KeepAsBefore));
     {
         let tx = tx.clone();
         g.on_set_sign_in(move |on| {
@@ -105,6 +106,8 @@ enum Command {
     KeepDark(DeviceRow),
     PutBack(DeviceRow),
     StopKeeping(DeviceRow),
+    /// Keep a device again as it was before you stopped keeping it.
+    KeepAsBefore(DeviceRow),
     /// Turn the keeper at sign-in on or off.
     SignIn(bool),
     /// Show or hide the keeper's icon in the notification area.
@@ -124,6 +127,19 @@ fn run_command(command: &Command, address: &str, setup_path: &Path) -> view::Not
                 Ok(_) => note(format!("Kept {} dark. The keeper turns it back off after sleep.", row.name), false),
                 Err(e @ keep::ActionError::NoLongerDark) => note(format!("Didn't keep {}. {e}", row.name), true),
                 Err(e) => note(format!("Couldn't keep {}. {e}", row.name), true),
+            }
+        }
+        Command::KeepAsBefore(row) => {
+            match keep::keep_as_before(address, setup_path, &row.name_key, &row.location_key) {
+                Ok(Outcome::Held) => note(format!("Keeping {} as before, and put it back.", row.name), false),
+                Ok(Outcome::NotHeld) => note(
+                    format!("Keeping {} as before, but it reads back as something else after being sent it.", row.name),
+                    true,
+                ),
+                Ok(Outcome::Skipped(reason)) => {
+                    note(format!("Keeping {} as before, but didn't send it: {reason}.", row.name), true)
+                }
+                Err(e) => note(format!("Couldn't keep {} as before. {e}", row.name), true),
             }
         }
         Command::StopKeeping(row) => match keep::stop_keeping(address, setup_path, &row.name_key, &row.location_key) {
@@ -230,6 +246,8 @@ fn apply(ui: &AppWindow, v: view::View) {
             status_text: r.status_text.into(),
             can_keep: r.can_keep,
             dark: r.dark,
+            has_before: r.has_before,
+            own_lighting: r.own_lighting,
             name: r.name.into(),
             product: r.product.into(),
             meta: r.meta.into(),

@@ -128,6 +128,12 @@ try {
     Check 'button: Keep it dark saves it' (Eventually { (Kept).Count -eq 3 })
     Click 'Stop keeping Motherboard'
     Check 'button: Stop keeping removes it' (Eventually { (Kept).Count -eq 2 })
+    Check 'a stopped device offers Keep it as before' (Eventually { Has 'Keep Motherboard as before' })
+    Click 'Keep Motherboard as before'
+    Check 'button: Keep it as before keeps it again' (Eventually { (Kept).Count -eq 3 })
+    Check 'a kept device always offers Put back' (Eventually { Has 'Put back Motherboard' })
+    Click 'Stop keeping Motherboard'
+    Check 'button: Stop keeping again removes it' (Eventually { (Kept).Count -eq 2 })
     Click 'Put kept lights back when you sign in'
     Check 'switch: on registers this exe with --keep' (Eventually { (Entry $entry) -like '*keeplight.exe" --keep' })
     # The keeper it starts inherits the fake server and the throwaway folder.

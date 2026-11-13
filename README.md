@@ -13,16 +13,17 @@ Keeplight is an independent project. It is not affiliated with OpenRGB or any ha
 Early development, nothing released yet. Stage 02, the keeper, is being built:
 
 - **Lists every device OpenRGB reports**, by plain name ("RAM stick 2", "Graphics card"), with the product name, light count, current effect and zones.
-- **Shows each device's current color** as a swatch, read back from the device.
+- **Shows each device's current color** as a swatch, read back from the device. A device running a lighting mode of its own, such as the keyboard's Onboard mode, shows a spectrum instead, because OpenRGB can't see the colors another app or the device itself is setting.
 - **Flags devices that cannot store a color themselves**, which go back to their own lighting whenever they lose power.
 - **Keep this** saves what a device shows now into Keeplight's own setup file. Set colors in OpenRGB first; a color picker comes in a later stage.
-- **Put back** appears when a kept device shows something else, and sends that one device its kept mode and colors.
+- **Put back** is on every kept device, highlighted when it shows something else, and sends that one device its kept mode and colors. After a power cut the lights can differ while OpenRGB's record still matches, so it's always there.
 
 - **Put kept lights back when you sign in** starts the keeper, `keeplight --keep`, now and at every sign-in. It has no window. It puts every kept device back when it starts, after the PC wakes, when OpenRGB's device list changes and when OpenRGB comes back after a restart, and logs each run to `%LOCALAPPDATA%\Keeplight\keeper.log`. Off until you turn it on; turning it off stops the keeper.
 
 - **A notification** tells you when the keeper couldn't put a kept device back, once per new problem. **Show the keeper's icon in the notification area** (off by default) keeps an icon there whose menu can open Keeplight or put kept lights back now.
 
-- **Stop keeping** removes a device from the setup and, if it's in Direct mode and has a built-in "Onboard" mode, hands it back to that, so it isn't left dark.
+- **Keep it as before** brings back what a device was kept as before you stopped keeping it, and puts it back.
+- **Stop keeping** removes a device from the setup (remembering it for Keep it as before) and, if it's in Direct mode and has a built-in "Onboard" mode, hands it back to that, so it isn't left dark.
 - **Keep it dark…** on a device whose lights are all off asks once before keeping it that way.
 
 Stage 02 is complete with these. Setting colors in Keeplight itself comes in stage 03. See the plan page.

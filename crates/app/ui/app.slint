@@ -16,6 +16,10 @@ export struct DeviceRow {
     can-keep: bool,
     // Every light is off: Keep asks before keeping it dark.
     dark: bool,
+    // It was kept before you stopped keeping it: "Keep it as before".
+    has-before: bool,
+    // It runs a lighting mode of its own, so its colors are unknown.
+    own-lighting: bool,
     name: string,
     product: string,
     meta: string,
@@ -45,6 +49,7 @@ export global Ui {
     callback put-back(DeviceRow);
     callback keep-dark(DeviceRow);
     callback stop-keeping(DeviceRow);
+    callback keep-as-before(DeviceRow);
     // The keeper at sign-in.
     in-out property <bool> sign-in;
     in property <string> sign-in-note;
@@ -79,11 +84,17 @@ component Chip inherits Rectangle {
 component Swatch inherits Rectangle {
     in property <bool> lit;
     in property <color> fill;
+    // A mode of its own: colors unknown, shown as a spectrum.
+    in property <bool> own;
     width: 28px;
     height: 28px;
     border-radius: self.width / 2;
-    background: root.lit ? root.fill : transparent;
-    border-width: root.lit ? 1px : 2px;
+    // The software renderer doesn't round gradient fills, so the spectrum is
+    // a radial gradient that fades out before the corners and looks round.
+    background: root.own
+        ? @radial-gradient(circle, #ffd23f 0%, #ff3b6b 40%, #3bd5ff 68%, #3bd5ff00 72%)
+        : root.lit ? root.fill : transparent;
+    border-width: root.own ? 0px : root.lit ? 1px : 2px;
     border-color: root.lit ? Theme.surface-border : Theme.secondary-text.transparentize(40%);
     accessible-role: none;
 }
@@ -99,9 +110,10 @@ component DeviceRowView inherits Rectangle {
     border-color: Theme.surface-border;
     accessible-role: list-item;
     accessible-label: root.item.name + ", " + root.item.product + ", " + root.item.meta
-        + (root.item.lit ? "" : ", all lights off")
-        + (root.item.note != "" ? ". " + root.item.note : "")
-        + (root.item.status-text != "" ? ". " + root.item.status-text : "");
+        + (root.item.own-lighting ? "" : root.item.lit ? "" : ", all lights off") + "."
+        // The note and status are sentences that end in their own period.
+        + (root.item.note != "" ? " " + root.item.note : "")
+        + (root.item.status-text != "" ? " " + root.item.status-text : "");
 
     content := HorizontalLayout {
         padding-left: 16px;
@@ -113,6 +125,7 @@ component DeviceRowView inherits Rectangle {
             alignment: center;
             Swatch {
                 lit: root.item.lit;
+                own: root.item.own-lighting;
                 fill: root.item.swatch;
             }
         }
@@ -175,9 +188,18 @@ component DeviceRowView inherits Rectangle {
         VerticalLayout {
             alignment: center;
             spacing: 6px;
-            if root.item.status == "differs": Button {
-                text: "Put back";
+            if root.item.status == "" && root.item.has-before: Button {
+                text: "Keep it as before";
                 primary: true;
+                enabled: !Ui.busy;
+                accessible-label: "Keep " + root.item.name + " as before";
+                clicked => { Ui.keep-as-before(root.item); }
+            }
+            // On every kept device: after a power cut the lights can differ
+            // while OpenRGB's record still matches.
+            if root.item.status != "": Button {
+                text: "Put back";
+                primary: root.item.status == "differs";
                 enabled: !Ui.busy;
                 accessible-label: "Put back " + root.item.name;
                 clicked => { Ui.put-back(root.item); }
