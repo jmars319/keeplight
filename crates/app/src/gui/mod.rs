@@ -44,7 +44,12 @@ pub fn run() -> i32 {
         loop {
             let result = keeplight_core::sdk::snapshot(&address).map_err(|e| e.to_string());
             let setup = Setup::load(&setup_path).map_err(|e| e.to_string());
-            let v = view::build(&result, &setup, &address, notice.as_ref());
+            let mut v = view::build(&result, &setup, &address, notice.as_ref());
+            let kept = setup.as_ref().map_or(0, |s| s.devices.len());
+            let this_exe = crate::platform::startup::command_for_this_exe().ok();
+            (v.sign_in, v.sign_in_note) =
+                view::sign_in(crate::platform::startup::current().as_deref(), this_exe.as_deref(), kept);
+            v.last_run = crate::platform::last_keeper_run().unwrap_or_default();
             if weak.upgrade_in_event_loop(move |ui| apply(&ui, v)).is_err() {
                 return;
             }
@@ -67,6 +72,12 @@ pub fn run() -> i32 {
     };
     g.on_keep(send(Command::Keep));
     g.on_put_back(send(Command::PutBack));
+    {
+        let tx = tx.clone();
+        g.on_set_sign_in(move |on| {
+            let _ = tx.send(Command::SignIn(on));
+        });
+    }
 
     let _repaint = repaint_after_restore(&ui);
     match ui.run() {
@@ -82,6 +93,8 @@ pub fn run() -> i32 {
 enum Command {
     Keep(DeviceRow),
     PutBack(DeviceRow),
+    /// Turn the keeper at sign-in on or off.
+    SignIn(bool),
 }
 
 fn run_command(command: &Command, address: &str, setup_path: &Path) -> view::Notice {
@@ -103,12 +116,30 @@ fn run_command(command: &Command, address: &str, setup_path: &Path) -> view::Not
             Ok(Outcome::Skipped(reason)) => note(format!("Didn't change {}: {reason}.", row.name), true),
             Err(e) => note(format!("Couldn't put {} back. {e}", row.name), true),
         },
+        Command::SignIn(on) => {
+            use crate::platform::startup;
+            let result = if *on {
+                startup::command_for_this_exe().and_then(|c| startup::set(Some(&c)))
+            } else {
+                startup::set(None)
+            };
+            match (result, on) {
+                (Ok(()), true) => {
+                    note("Keeplight will put your kept devices back each time you sign in.".into(), false)
+                }
+                (Ok(()), false) => note("Keeplight won't run at sign-in any more.".into(), false),
+                (Err(e), _) => note(format!("Couldn't change the sign-in setting. {e}"), true),
+            }
+        }
     }
 }
 
 fn apply(ui: &AppWindow, v: view::View) {
     let g = ui.global::<Ui>();
     g.set_busy(false);
+    g.set_sign_in(v.sign_in);
+    g.set_sign_in_note(v.sign_in_note.into());
+    g.set_last_run(v.last_run.into());
     g.set_notice(v.notice.into());
     g.set_notice_warn(v.notice_warn);
     g.set_screen(match v.screen {

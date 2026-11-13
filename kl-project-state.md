@@ -24,7 +24,9 @@ Agent-facing working state. The plan page is the owner-facing view; this file ho
 
 ## Active Task State & Known Regressions
 
-- PR 1 in progress (2026-11-13). Verified: 43 tests, clippy clean, smoke test passes on the fixed theme and fails on the pre-#4 theme (5ebc13d), as required.
+- PR 1 merged as #8 (1b174e5, 2026-11-13) after a Codex finding: `fit` now compares speed, brightness, direction and color mode too.
+- PR 2 in progress (2026-11-13), branch `feat/keeper-at-sign-in`: `keep::put_back_all` (waits up to 120 s, polls every 3 s, for every kept device), `keeplight --keep` (no window, named mutex, `keeper.log`), the sign-in switch (HKCU Run value `Keeplight`, off by default, `KEEPLIGHT_STARTUP_NAME` for tests), uninstall removes the value and stops the exe. Verified: 53 tests, smoke 7/7 including the switch, one real `--keep` run put back 2 of 2 RAM sticks in 128 ms with all 5 devices still red.
+- Owner's real setup (2026-11-13): both RAM sticks kept as red Chase Fade. The owner's account had no OpenRGB Start menu shortcut; one was added.
 - Real-hardware check 2026-11-13: keep + put back of RAM stick 1 (0x71) into a throwaway setup returned `Held` in 6.6 ms, lights unchanged (put back to the same red Chase Fade).
 - Finding: the read-back after Put back is OpenRGB's in-memory record, not the chip. It proves OpenRGB took the request, not that the hardware shows it. ENE RAM falls back to rainbow on power loss without OpenRGB noticing until a rescan. PR 2/3 must not treat `Held` as proof the RAM is lit; re-apply on wake regardless.
 - Real Chase Fade on the Mushkin ENE sticks reports color mode per-LED (1), not mode-specific; fixtures match.
@@ -39,7 +41,7 @@ Agent-facing working state. The plan page is the owner-facing view; this file ho
 
 ## Context Compaction Checklist
 
-- Branch and PR number of the current keeper PR, and its CI state.
+- Branch and PR number of the current keeper PR, and its CI state. Codex reviews each PR and `main` requires resolved conversations: answer and resolve its threads. Auto-merge is on.
 - Whether the owner has done the sleep/restart tests for PR 2 and PR 3.
 - Plan page version and whether it reflects the merged PRs.
 - Any new real-hardware finding (date it).

@@ -28,6 +28,39 @@ pub struct View {
     pub notice: String,
     pub notice_warn: bool,
     pub rows: Vec<Row>,
+    /// Whether the keeper runs at sign-in, with a sentence about it.
+    pub sign_in: bool,
+    pub sign_in_note: String,
+    /// The keeper's last log summary, if it has run.
+    pub last_run: String,
+}
+
+/// The sign-in switch's state and sentence. `current` is the registered
+/// startup command, `this_exe` the one this copy of Keeplight would register.
+pub fn sign_in(current: Option<&str>, this_exe: Option<&str>, kept: usize) -> (bool, String) {
+    let Some(current) = current else {
+        let note = if kept > 0 {
+            "Off: kept devices are put back only when you press Put back."
+        } else {
+            "Off. Keep a device first, then turn this on."
+        };
+        return (false, note.to_string());
+    };
+    if this_exe.is_some_and(|c| !c.eq_ignore_ascii_case(current)) {
+        return (
+            true,
+            format!(
+                "On, but sign-in starts another copy of Keeplight ({current}). Turn this off and on again to \
+                 use this copy."
+            ),
+        );
+    }
+    let note = if kept > 0 {
+        "Each time you sign in, Keeplight puts your kept devices back without opening this window."
+    } else {
+        "On, but nothing is kept yet, so there is nothing to put back."
+    };
+    (true, note.to_string())
 }
 
 /// Where a device stands against what you kept.
@@ -126,6 +159,9 @@ pub fn build(result: &Result<Snapshot, String>, setup: &SetupView, address: &str
         notice,
         notice_warn,
         rows: rows(&snapshot.devices, kept),
+        sign_in: false,
+        sign_in_note: String::new(),
+        last_run: String::new(),
     }
 }
 
@@ -217,6 +253,9 @@ fn message(chip: &str, heading: &str, message: &str) -> View {
         notice: String::new(),
         notice_warn: false,
         rows: Vec::new(),
+        sign_in: false,
+        sign_in_note: String::new(),
+        last_run: String::new(),
     }
 }
 
@@ -359,6 +398,21 @@ mod tests {
         assert!(v.notice_warn);
         assert!(v.notice.contains("it isn't valid JSON"));
         assert!(!v.rows[0].can_keep);
+    }
+
+    #[test]
+    fn sign_in_says_what_it_will_do() {
+        let exe = r#""C:\Keeplight\keeplight.exe" --keep"#;
+        let (on, note) = sign_in(None, Some(exe), 2);
+        assert!(!on && note.starts_with("Off: kept devices"));
+        assert!(sign_in(None, Some(exe), 0).1.contains("Keep a device first"));
+        let (on, note) = sign_in(Some(exe), Some(exe), 2);
+        assert!(on && note.starts_with("Each time you sign in"));
+        assert!(sign_in(Some(exe), Some(exe), 0).1.contains("nothing is kept yet"));
+        let other = r#""C:\dev\target\debug\keeplight.exe" --keep"#;
+        let (on, note) = sign_in(Some(other), Some(exe), 2);
+        assert!(on && note.contains("another copy") && note.contains("debug"));
+        assert!(sign_in(Some(&exe.to_uppercase()), Some(exe), 1).1.starts_with("Each time"), "paths ignore case");
     }
 
     #[test]
