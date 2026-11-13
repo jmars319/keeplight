@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-use crate::device::Device;
+use crate::device::{Device, Mode, Rgb};
 use wire::{HEADER_LEN, packet};
 
 /// Where OpenRGB listens unless told otherwise.
@@ -95,6 +95,18 @@ impl Client {
         Device::parse(index, &reply, self.protocol)
     }
 
+    /// Switches device `device` to its mode number `index`, with `mode`'s
+    /// settings. OpenRGB sends no reply; read the device back to check.
+    pub fn update_mode(&mut self, device: u32, index: usize, mode: &Mode) -> Result<(), SdkError> {
+        self.send(device, packet::UPDATE_MODE, &wire::update_mode(index, mode, self.protocol))
+    }
+
+    /// Sets every light on device `device`, one color per light, in order.
+    /// OpenRGB sends no reply; read the device back to check.
+    pub fn update_leds(&mut self, device: u32, colors: &[Rgb]) -> Result<(), SdkError> {
+        self.send(device, packet::UPDATE_LEDS, &wire::update_leds(colors))
+    }
+
     pub fn snapshot(&mut self) -> Result<Snapshot, SdkError> {
         let count = self.controller_count()?;
         let devices = (0..count).map(|i| self.controller(i)).collect::<Result<Vec<_>, _>>()?;
@@ -133,73 +145,56 @@ pub fn snapshot(address: &str) -> Result<Snapshot, SdkError> {
 #[cfg(test)]
 mod tests {
     use std::net::TcpListener;
-    use std::thread;
 
     use super::*;
     use crate::device::Kind;
-    use crate::device::tests::Fixture;
-
-    /// A stand-in OpenRGB server that answers the read-only requests from
-    /// fixtures, and records every packet id it was sent.
-    fn fake_server(server_protocol: u32, devices: Vec<Vec<u8>>) -> (String, thread::JoinHandle<Vec<u32>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap().to_string();
-        let handle = thread::spawn(move || {
-            let (mut s, _) = listener.accept().unwrap();
-            let mut seen = Vec::new();
-            loop {
-                let mut head = [0u8; HEADER_LEN];
-                if s.read_exact(&mut head).is_err() {
-                    return seen;
-                }
-                let h = wire::decode_header(&head).unwrap();
-                let mut payload = vec![0u8; h.size as usize];
-                s.read_exact(&mut payload).unwrap();
-                seen.push(h.id);
-                let reply = match h.id {
-                    packet::REQUEST_PROTOCOL_VERSION => Some(server_protocol.to_le_bytes().to_vec()),
-                    packet::REQUEST_CONTROLLER_COUNT => {
-                        // An unrequested notice first, which the client must skip.
-                        s.write_all(&wire::encode(0, packet::DEVICE_LIST_UPDATED, &[])).unwrap();
-                        Some((devices.len() as u32).to_le_bytes().to_vec())
-                    }
-                    packet::REQUEST_CONTROLLER_DATA => Some(devices[h.device as usize].clone()),
-                    _ => None,
-                };
-                if let Some(r) = reply {
-                    s.write_all(&wire::encode(h.device, h.id, &r)).unwrap();
-                }
-            }
-        });
-        (address, handle)
-    }
+    use crate::testing::{self, FakeServer};
 
     #[test]
     fn reads_every_device_and_negotiates_down() {
-        let devices = vec![
-            Fixture::ram("ENE DRAM", "SMBus 0x71", 0x0000ff).encode(),
-            Fixture::ram("ENE DRAM", "SMBus 0x73", 0x0000ff).encode(),
-        ];
-        let (address, server) = fake_server(6, devices);
-        let mut client = Client::connect(&address).unwrap();
+        let server = FakeServer::start(vec![testing::ram("SMBus 0x71"), testing::ram("SMBus 0x73")]);
+        let mut client = Client::connect(&server.address).unwrap();
         assert_eq!(client.server_protocol(), 6);
         assert_eq!(client.protocol(), CLIENT_PROTOCOL);
         let snap = client.snapshot().unwrap();
-        drop(client);
         assert_eq!(snap.server_protocol, 6);
         assert_eq!(snap.devices.len(), 2);
+        assert_eq!(snap.devices[1].index, 1);
         assert_eq!(snap.devices[1].location, "SMBus 0x73");
         assert!(snap.devices.iter().all(|d| d.kind == Kind::Ram));
 
-        // Only questions were asked: no request that changes a light.
-        let seen = server.join().unwrap();
+        // Reading asks only questions: no request that changes a light.
         let read_only = [
             packet::REQUEST_PROTOCOL_VERSION,
             packet::SET_CLIENT_NAME,
             packet::REQUEST_CONTROLLER_COUNT,
             packet::REQUEST_CONTROLLER_DATA,
         ];
+        let seen = server.seen_ids();
         assert!(seen.iter().all(|id| read_only.contains(id)), "sent {seen:?}");
+    }
+
+    #[test]
+    fn writes_reach_only_the_named_device() {
+        let blue = Rgb { r: 0, g: 0, b: 255 };
+        let server = FakeServer::start(vec![testing::ram("SMBus 0x71"), testing::keyboard(testing::RED)]);
+        let mut client = Client::connect(&server.address).unwrap();
+        let direct = client.controller(1).unwrap().modes[0].clone();
+        client.update_mode(1, 0, &direct).unwrap();
+        client.update_leds(1, &[blue; 6]).unwrap();
+        // A read after the writes also proves they were all received.
+        assert_eq!(client.controller(1).unwrap().colors, vec![blue; 6]);
+        assert_eq!(server.device(0), Device { index: 0, ..testing::ram("SMBus 0x71") });
+        let writes: Vec<_> = server
+            .state
+            .lock()
+            .unwrap()
+            .seen
+            .iter()
+            .filter(|(id, _)| [packet::UPDATE_MODE, packet::UPDATE_LEDS].contains(id))
+            .copied()
+            .collect();
+        assert_eq!(writes, [(packet::UPDATE_MODE, 1), (packet::UPDATE_LEDS, 1)]);
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! What OpenRGB reports about one lighting controller, decoded from its
 //! `REQUEST_CONTROLLER_DATA` reply.
 
+use serde::{Deserialize, Serialize};
+
 use crate::sdk::SdkError;
 use crate::sdk::wire::Reader;
 
@@ -30,30 +32,35 @@ pub enum Kind {
 }
 
 impl Kind {
+    const ALL: [Kind; 19] = [
+        Kind::Motherboard,
+        Kind::Ram,
+        Kind::GraphicsCard,
+        Kind::Cooler,
+        Kind::LedStrip,
+        Kind::Keyboard,
+        Kind::Mouse,
+        Kind::Mousemat,
+        Kind::Headset,
+        Kind::HeadsetStand,
+        Kind::Gamepad,
+        Kind::Light,
+        Kind::Speaker,
+        Kind::Virtual,
+        Kind::Storage,
+        Kind::Case,
+        Kind::Microphone,
+        Kind::Accessory,
+        Kind::Keypad,
+    ];
+
     pub fn from_code(code: i32) -> Self {
-        use Kind::*;
-        const ALL: [Kind; 19] = [
-            Motherboard,
-            Ram,
-            GraphicsCard,
-            Cooler,
-            LedStrip,
-            Keyboard,
-            Mouse,
-            Mousemat,
-            Headset,
-            HeadsetStand,
-            Gamepad,
-            Light,
-            Speaker,
-            Virtual,
-            Storage,
-            Case,
-            Microphone,
-            Accessory,
-            Keypad,
-        ];
-        usize::try_from(code).ok().and_then(|i| ALL.get(i).copied()).unwrap_or(Unknown)
+        usize::try_from(code).ok().and_then(|i| Self::ALL.get(i).copied()).unwrap_or(Kind::Unknown)
+    }
+
+    /// OpenRGB's number for this kind; `Unknown` has none and maps to -1.
+    pub fn code(self) -> i32 {
+        Self::ALL.iter().position(|&k| k == self).map_or(-1, |i| i as i32)
     }
 
     /// What a person calls it.
@@ -83,7 +90,7 @@ impl Kind {
     }
 }
 
-/// A color as OpenRGB stores it: `0x00BBGGRR`.
+/// A color as OpenRGB stores it: `0x00BBGGRR`. Saved as `"#rrggbb"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Rgb {
     pub r: u8,
@@ -96,8 +103,38 @@ impl Rgb {
         Self { r: v as u8, g: (v >> 8) as u8, b: (v >> 16) as u8 }
     }
 
+    pub fn to_wire(self) -> u32 {
+        u32::from(self.r) | u32::from(self.g) << 8 | u32::from(self.b) << 16
+    }
+
     pub fn is_black(self) -> bool {
         self == Rgb::default()
+    }
+
+    pub fn hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+    }
+
+    pub fn from_hex(text: &str) -> Option<Self> {
+        let digits = text.strip_prefix('#')?;
+        if digits.len() != 6 || !digits.is_ascii() {
+            return None;
+        }
+        let byte = |i: usize| u8::from_str_radix(&digits[i..i + 2], 16).ok();
+        Some(Self { r: byte(0)?, g: byte(2)?, b: byte(4)? })
+    }
+}
+
+impl Serialize for Rgb {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for Rgb {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        Rgb::from_hex(&text).ok_or_else(|| serde::de::Error::custom(format!("not a #rrggbb color: {text}")))
     }
 }
 
@@ -107,10 +144,36 @@ pub mod flags {
     pub const AUTOMATIC_SAVE: u32 = 1 << 9;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Where a mode takes its colors from, from OpenRGB's `RGBController.h`.
+pub mod color_mode {
+    /// The effect has fixed colors, such as a rainbow.
+    pub const NONE: u32 = 0;
+    /// Each light shows its own color from the device's color list.
+    pub const PER_LED: u32 = 1;
+    /// The effect uses the mode's own short color list.
+    pub const MODE_SPECIFIC: u32 = 2;
+    pub const RANDOM: u32 = 3;
+}
+
+/// One of a device's modes, with every field OpenRGB sends, so that it can be
+/// sent back unchanged in `UPDATE_MODE`. Brightness fields exist only from
+/// protocol 3; at lower versions they read as 0 and are not sent.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Mode {
     pub name: String,
+    pub value: i32,
     pub flags: u32,
+    pub speed_min: u32,
+    pub speed_max: u32,
+    pub brightness_min: u32,
+    pub brightness_max: u32,
+    pub colors_min: u32,
+    pub colors_max: u32,
+    pub speed: u32,
+    pub brightness: u32,
+    pub direction: u32,
+    pub color_mode: u32,
+    pub colors: Vec<Rgb>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,7 +187,9 @@ pub struct Zone {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Device {
-    /// OpenRGB's index for this controller in the current device list.
+    /// OpenRGB's index for this controller in the current device list. It can
+    /// change when devices come and go, so saved setups match on name and
+    /// location instead.
     pub index: u32,
     pub kind: Kind,
     pub name: String,
@@ -137,8 +202,16 @@ pub struct Device {
 }
 
 impl Device {
+    pub fn active(&self) -> Option<&Mode> {
+        self.active_mode.and_then(|i| self.modes.get(i))
+    }
+
     pub fn active_mode_name(&self) -> Option<&str> {
-        self.active_mode.and_then(|i| self.modes.get(i)).map(|m| m.name.as_str())
+        self.active().map(|m| m.name.as_str())
+    }
+
+    pub fn mode_index(&self, name: &str) -> Option<usize> {
+        self.modes.iter().position(|m| m.name == name)
     }
 
     pub fn led_count(&self) -> usize {
@@ -150,6 +223,17 @@ impl Device {
     /// its color whenever it loses power and has to be set again.
     pub fn can_store_color(&self) -> bool {
         self.modes.iter().any(|m| m.flags & (flags::MANUAL_SAVE | flags::AUTOMATIC_SAVE) != 0)
+    }
+
+    /// The colors the device is showing: its own per-light list in a per-light
+    /// mode, the mode's colors in a mode that has its own, and nothing for an
+    /// effect with fixed colors.
+    pub fn shown_colors(&self) -> &[Rgb] {
+        match self.active().map(|m| m.color_mode) {
+            Some(color_mode::MODE_SPECIFIC) => self.active().map_or(&[], |m| &m.colors),
+            Some(color_mode::NONE | color_mode::RANDOM) => &[],
+            _ => &self.colors,
+        }
     }
 
     /// The color most of its lit LEDs show, or `None` when every LED is off
@@ -190,16 +274,7 @@ impl Device {
         let active = r.i32()?;
         let mut modes = Vec::with_capacity(mode_count);
         for _ in 0..mode_count {
-            let name = r.string()?;
-            let _value = r.i32()?;
-            let flags = r.u32()?;
-            // speed min/max, [brightness min/max], colors min/max, speed,
-            // [brightness], direction, color mode.
-            let words = if protocol >= 3 { 10 } else { 7 };
-            r.skip(4 * words)?;
-            let colors = r.u16()? as usize;
-            r.skip(4 * colors)?;
-            modes.push(Mode { name, flags });
+            modes.push(parse_mode(&mut r, protocol)?);
         }
 
         let zone_count = r.u16()? as usize;
@@ -239,130 +314,61 @@ impl Device {
     }
 }
 
+pub(crate) fn parse_mode(r: &mut Reader, protocol: u32) -> Result<Mode, SdkError> {
+    let mut m = Mode { name: r.string()?, value: r.i32()?, flags: r.u32()?, ..Mode::default() };
+    m.speed_min = r.u32()?;
+    m.speed_max = r.u32()?;
+    if protocol >= 3 {
+        m.brightness_min = r.u32()?;
+        m.brightness_max = r.u32()?;
+    }
+    m.colors_min = r.u32()?;
+    m.colors_max = r.u32()?;
+    m.speed = r.u32()?;
+    if protocol >= 3 {
+        m.brightness = r.u32()?;
+    }
+    m.direction = r.u32()?;
+    m.color_mode = r.u32()?;
+    let count = r.u16()? as usize;
+    m.colors = (0..count).map(|_| r.u32().map(Rgb::from_wire)).collect::<Result<_, _>>()?;
+    Ok(m)
+}
+
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
+    use crate::testing::{self, RED};
 
-    /// A zone as (name, light count, optional width and height).
-    pub type FixtureZone = (&'static str, u32, Option<(u32, u32)>);
-
-    /// Builds a controller payload the way OpenRGB serializes one at
-    /// protocol 3, so tests can feed the parser and the fake server.
-    pub struct Fixture {
-        pub kind: i32,
-        pub name: &'static str,
-        pub vendor: &'static str,
-        pub location: &'static str,
-        pub modes: Vec<(&'static str, u32)>,
-        pub active: i32,
-        pub zones: Vec<FixtureZone>,
-        pub colors: Vec<u32>,
-    }
-
-    fn put_str(out: &mut Vec<u8>, s: &str) {
-        out.extend_from_slice(&((s.len() + 1) as u16).to_le_bytes());
-        out.extend_from_slice(s.as_bytes());
-        out.push(0);
-    }
-
-    impl Fixture {
-        pub fn ram(name: &'static str, location: &'static str, color: u32) -> Self {
-            Fixture {
-                kind: 1,
-                name,
-                vendor: "ENE",
-                location,
-                modes: vec![("Direct", 0x20), ("Static", 0x40), ("Chase Fade", 0x40)],
-                active: 2,
-                zones: vec![("DRAM", 8, None)],
-                colors: vec![color; 8],
-            }
-        }
-
-        pub fn encode(&self) -> Vec<u8> {
-            let mut b = Vec::new();
-            b.extend_from_slice(&0u32.to_le_bytes());
-            b.extend_from_slice(&self.kind.to_le_bytes());
-            put_str(&mut b, self.name);
-            put_str(&mut b, self.vendor);
-            put_str(&mut b, "description");
-            put_str(&mut b, "1.0");
-            put_str(&mut b, "");
-            put_str(&mut b, self.location);
-            b.extend_from_slice(&(self.modes.len() as u16).to_le_bytes());
-            b.extend_from_slice(&self.active.to_le_bytes());
-            for (name, flags) in &self.modes {
-                put_str(&mut b, name);
-                b.extend_from_slice(&0i32.to_le_bytes());
-                b.extend_from_slice(&flags.to_le_bytes());
-                for _ in 0..10 {
-                    b.extend_from_slice(&0u32.to_le_bytes());
-                }
-                b.extend_from_slice(&1u16.to_le_bytes());
-                b.extend_from_slice(&0x0000ffu32.to_le_bytes());
-            }
-            b.extend_from_slice(&(self.zones.len() as u16).to_le_bytes());
-            for (name, leds, matrix) in &self.zones {
-                put_str(&mut b, name);
-                b.extend_from_slice(&0i32.to_le_bytes());
-                b.extend_from_slice(&leds.to_le_bytes());
-                b.extend_from_slice(&leds.to_le_bytes());
-                b.extend_from_slice(&leds.to_le_bytes());
-                match matrix {
-                    Some((w, h)) => {
-                        let cells = (w * h) as usize;
-                        b.extend_from_slice(&((8 + 4 * cells) as u16).to_le_bytes());
-                        b.extend_from_slice(&h.to_le_bytes());
-                        b.extend_from_slice(&w.to_le_bytes());
-                        for i in 0..cells {
-                            b.extend_from_slice(&(i as u32).to_le_bytes());
-                        }
-                    }
-                    None => b.extend_from_slice(&0u16.to_le_bytes()),
-                }
-            }
-            b.extend_from_slice(&(self.colors.len() as u16).to_le_bytes());
-            for i in 0..self.colors.len() {
-                put_str(&mut b, &format!("LED {i}"));
-                b.extend_from_slice(&0u32.to_le_bytes());
-            }
-            b.extend_from_slice(&(self.colors.len() as u16).to_le_bytes());
-            for c in &self.colors {
-                b.extend_from_slice(&c.to_le_bytes());
-            }
-            let size = b.len() as u32;
-            b[..4].copy_from_slice(&size.to_le_bytes());
-            b
-        }
+    fn round_trip(d: &Device) -> Device {
+        Device::parse(d.index, &testing::encode_device(d, 3), 3).unwrap()
     }
 
     #[test]
     fn parses_a_ram_stick() {
-        let bytes = Fixture::ram("ENE DRAM", "I2C: SMBus 0x71", 0x0000ff).encode();
-        let d = Device::parse(0, &bytes, 3).unwrap();
+        let d = round_trip(&testing::ram("SMBus 0x71"));
         assert_eq!(d.kind, Kind::Ram);
         assert_eq!(d.name, "ENE DRAM");
         assert_eq!(d.vendor, "ENE");
-        assert_eq!(d.location, "I2C: SMBus 0x71");
+        assert_eq!(d.location, "SMBus 0x71");
         assert_eq!(d.active_mode_name(), Some("Chase Fade"));
         assert_eq!(d.led_count(), 8);
-        assert_eq!(d.lit_color(), Some(Rgb { r: 255, g: 0, b: 0 }));
+        assert_eq!(d.lit_color(), Some(RED));
         assert!(!d.can_store_color());
     }
 
     #[test]
+    fn keeps_every_mode_field() {
+        let mut d = testing::board();
+        let m = &mut d.modes[1];
+        (m.speed_min, m.speed_max, m.brightness_min, m.brightness_max) = (1, 2, 3, 4);
+        (m.colors_min, m.colors_max, m.speed, m.brightness, m.direction) = (5, 6, 7, 8, 9);
+        assert_eq!(round_trip(&d), d);
+    }
+
+    #[test]
     fn reads_a_keyboard_grid() {
-        let f = Fixture {
-            kind: 5,
-            name: "Keyboard",
-            vendor: "SteelSeries",
-            location: "HID",
-            modes: vec![("Direct", 0x20), ("Onboard", 0x10)],
-            active: 0,
-            zones: vec![("Keyboard", 6, Some((3, 2)))],
-            colors: vec![0; 6],
-        };
-        let d = Device::parse(4, &f.encode(), 3).unwrap();
+        let d = round_trip(&testing::keyboard(Rgb::default()));
         assert_eq!(d.kind, Kind::Keyboard);
         assert_eq!(d.zones[0].matrix, Some((3, 2)));
         assert_eq!(d.lit_color(), None);
@@ -370,46 +376,63 @@ pub(crate) mod tests {
 
     #[test]
     fn a_few_lit_keys_still_count_as_lit() {
-        let green = 0x00ff00;
-        let mut colors = vec![0; 10];
-        colors[2] = green;
-        colors[3] = green;
-        let mut f = Fixture::ram("Keyboard", "HID", 0);
-        f.colors = colors;
-        let d = Device::parse(0, &f.encode(), 3).unwrap();
-        assert_eq!(d.lit_color(), Some(Rgb { r: 0, g: 255, b: 0 }));
+        let green = Rgb { r: 0, g: 255, b: 0 };
+        let mut d = testing::keyboard(Rgb::default());
+        d.colors[2] = green;
+        d.colors[3] = green;
+        assert_eq!(round_trip(&d).lit_color(), Some(green));
     }
 
     #[test]
     fn a_saving_mode_means_the_device_keeps_its_color() {
-        let mut f = Fixture::ram("Board", "USB", 0);
-        f.kind = 0;
-        f.modes.push(("Static", 0x140));
-        assert!(Device::parse(0, &f.encode(), 3).unwrap().can_store_color());
+        let mut d = testing::ram("USB");
+        d.modes.push(Mode { name: "Static".into(), flags: flags::MANUAL_SAVE, ..Mode::default() });
+        assert!(round_trip(&d).can_store_color());
+    }
+
+    #[test]
+    fn shown_colors_follow_the_mode() {
+        assert_eq!(testing::board().shown_colors(), &[RED]);
+        assert_eq!(testing::ram("SMBus").shown_colors().len(), 8);
+        let mut rainbow = testing::ram("SMBus");
+        rainbow.active_mode = Some(1);
+        assert!(rainbow.shown_colors().is_empty());
     }
 
     #[test]
     fn out_of_range_active_mode_is_none() {
-        let mut f = Fixture::ram("RAM", "SMBus", 0);
-        f.active = 9;
-        assert_eq!(Device::parse(0, &f.encode(), 3).unwrap().active_mode, None);
+        let bytes = testing::encode_with_active(&testing::ram("SMBus"), 3, 9);
+        assert_eq!(Device::parse(0, &bytes, 3).unwrap().active_mode, None);
     }
 
     #[test]
     fn truncated_payload_is_an_error() {
-        let bytes = Fixture::ram("RAM", "SMBus", 0).encode();
+        let bytes = testing::encode_device(&testing::ram("SMBus"), 3);
         assert!(Device::parse(0, &bytes[..bytes.len() - 3], 3).is_err());
     }
 
     #[test]
     fn colors_are_bgr_on_the_wire() {
-        assert_eq!(Rgb::from_wire(0x00336699), Rgb { r: 0x99, g: 0x66, b: 0x33 });
+        let c = Rgb::from_wire(0x00336699);
+        assert_eq!(c, Rgb { r: 0x99, g: 0x66, b: 0x33 });
+        assert_eq!(c.to_wire(), 0x00336699);
     }
 
     #[test]
-    fn unknown_kinds_map_to_unknown() {
+    fn colors_save_as_hex() {
+        assert_eq!(Rgb { r: 255, g: 8, b: 0 }.hex(), "#ff0800");
+        assert_eq!(Rgb::from_hex("#ff0800"), Some(Rgb { r: 255, g: 8, b: 0 }));
+        assert_eq!(Rgb::from_hex("ff0800"), None);
+        assert_eq!(Rgb::from_hex("#ff08"), None);
+        assert_eq!(Rgb::from_hex("#gg0000"), None);
+    }
+
+    #[test]
+    fn kinds_map_both_ways() {
         assert_eq!(Kind::from_code(2), Kind::GraphicsCard);
+        assert_eq!(Kind::GraphicsCard.code(), 2);
         assert_eq!(Kind::from_code(-1), Kind::Unknown);
         assert_eq!(Kind::from_code(99), Kind::Unknown);
+        assert_eq!(Kind::Unknown.code(), -1);
     }
 }

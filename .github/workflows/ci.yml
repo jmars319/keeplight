@@ -43,11 +43,21 @@ jobs:
       - name: Release build
         run: cargo build --release --locked -p keeplight
 
+      - name: Build the fake OpenRGB server for the smoke test
+        run: cargo build --release --locked -p keeplight-core --features testing --example fake-openrgb
+
       - name: Report binary size
         shell: pwsh
         run: |
           $exe = Get-Item target/release/keeplight.exe
           "keeplight.exe: {0:N1} MB" -f ($exe.Length / 1MB) | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      # Drives the release build's real window with posted mouse messages,
+      # against the fake server and a throwaway setup folder; the hosted
+      # runner's desktop session makes that possible.
+      - name: Smoke test, real mouse clicks
+        shell: pwsh
+        run: ./scripts/smoke-mouse-clicks.ps1
 
   security:
     name: Dependency policy

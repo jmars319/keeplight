@@ -10,14 +10,15 @@ Keeplight is an independent project. It is not affiliated with OpenRGB or any ha
 
 ## Status
 
-Early development, nothing released yet. This first version is read-only:
+Early development, nothing released yet. Stage 02, the keeper, is being built:
 
 - **Lists every device OpenRGB reports**, by plain name ("RAM stick 2", "Graphics card"), with the product name, light count, current effect and zones.
 - **Shows each device's current color** as a swatch, read back from the device.
 - **Flags devices that cannot store a color themselves**, which go back to their own lighting whenever they lose power.
-- **Changes nothing.** It sends OpenRGB only questions, never a request that changes a light, and writes no file.
+- **Keep this** saves what a device shows now into Keeplight's own setup file. Set colors in OpenRGB first; a color picker comes in a later stage.
+- **Put back** appears when a kept device shows something else, and sends that one device its kept mode and colors.
 
-Setting colors, keeping them applied after sleep and restarts, and the case map come in later stages on the plan page.
+Putting kept devices back by itself, at sign-in, on wake and when a device reconnects, comes next. See the plan page.
 
 ## Build from source
 
@@ -28,7 +29,9 @@ cargo test --workspace
 cargo run -p keeplight
 ```
 
-Set `KEEPLIGHT_OPENRGB` to another `host:port` to point Keeplight at a different SDK server, such as a test one.
+Set `KEEPLIGHT_OPENRGB` to another `host:port` to point Keeplight at a different SDK server, such as a test one, and `KEEPLIGHT_DATA` to another folder for the setup file.
+
+`cargo run -p keeplight-core --features testing --example fake-openrgb` starts a fake SDK server with two RAM sticks and a keyboard and prints its address. `scripts/smoke-mouse-clicks.ps1` clicks the real window's buttons against it (CI runs it too).
 
 `scripts/package.ps1` builds the portable zip and, when Inno Setup 6 is installed, the per-user installer into `dist/`. `scripts/generate-icon.ps1` redraws the icon in `assets/`.
 
@@ -36,7 +39,7 @@ Releases: a `v*` tag builds those into a draft GitHub release. Publishing the dr
 
 ## Safety
 
-[docs/safety-model.md](docs/safety-model.md) lists every request Keeplight sends to OpenRGB. It writes no file.
+[docs/safety-model.md](docs/safety-model.md) lists every request Keeplight sends to OpenRGB and the one file it writes. It changes a light only when you press Put back, and only that device.
 
 ## License
 

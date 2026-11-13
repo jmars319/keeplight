@@ -1,9 +1,10 @@
-//! Turns what OpenRGB reported into the words the window shows. Plain Rust,
-//! so it is tested without a window.
+//! Turns what OpenRGB reported, and what you chose to keep, into the words
+//! the window shows. Plain Rust, so it is tested without a window.
 
 use std::collections::HashMap;
 
 use keeplight_core::device::{Device, Kind};
+use keeplight_core::keep::{Fit, KeepError, Kept, Setup};
 use keeplight_core::sdk::Snapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,11 +23,39 @@ pub struct View {
     pub heading: String,
     pub message: String,
     pub summary: String,
+    /// A line under the heading: the result of the last action, or a problem
+    /// with the saved setup.
+    pub notice: String,
+    pub notice_warn: bool,
     pub rows: Vec<Row>,
+}
+
+/// Where a device stands against what you kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    NotKept,
+    Kept,
+    Differs,
+    /// Kept, but the device changed so the kept setup no longer fits.
+    Changed,
+}
+
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::NotKept => "",
+            Status::Kept => "kept",
+            Status::Differs => "differs",
+            Status::Changed => "changed",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
+    /// Identifies the device to the actions: product name and location.
+    pub name_key: String,
+    pub location_key: String,
     /// What a person calls it, such as "RAM stick 2".
     pub name: String,
     /// The product name OpenRGB reports.
@@ -39,13 +68,25 @@ pub struct Row {
     /// The color most of its lit lights show; `None` only when every light
     /// is off.
     pub swatch: Option<(u8, u8, u8)>,
+    pub status: Status,
+    /// A sentence about the status, or why it can't be kept.
+    pub status_text: String,
+    pub can_keep: bool,
 }
 
-pub fn build(result: &Result<Snapshot, String>, address: &str) -> View {
+/// The saved setup as the window sees it: read, or the reason it couldn't be.
+pub type SetupView = Result<Setup, String>;
+
+pub fn build(result: &Result<Snapshot, String>, setup: &SetupView, address: &str, notice: Option<&Notice>) -> View {
+    let (notice, notice_warn) = match (setup, notice) {
+        (Err(reason), _) => (format!("Your saved setup can't be used, so Keep and Put back are off. {reason}"), true),
+        (Ok(_), Some(n)) => (n.text.clone(), n.warn),
+        (Ok(_), None) => (String::new(), false),
+    };
     let snapshot = match result {
         Ok(s) => s,
         Err(reason) => {
-            return message(
+            let mut v = message(
                 "Not connected",
                 "Can't reach OpenRGB",
                 &format!(
@@ -54,29 +95,48 @@ pub fn build(result: &Result<Snapshot, String>, address: &str) -> View {
                      checks again every few seconds.\n\n{reason}"
                 ),
             );
+            (v.notice, v.notice_warn) = (notice, notice_warn);
+            return v;
         }
     };
     if snapshot.devices.is_empty() {
-        return message(
+        let mut v = message(
             "Connected",
             "OpenRGB hasn't found any lights yet",
             "OpenRGB is running but reports no devices. It may still be scanning after startup. This window \
              checks again every few seconds.",
         );
+        (v.notice, v.notice_warn) = (notice, notice_warn);
+        return v;
     }
     let lights: usize = snapshot.devices.iter().map(Device::led_count).sum();
+    let kept = setup.as_ref().ok();
+    let kept_count = kept.map_or(0, |s| snapshot.devices.iter().filter(|d| s.find(d).is_some()).count());
+    let mut summary = format!("{} · {}", plural(snapshot.devices.len(), "device"), plural(lights, "light"));
+    if kept_count > 0 {
+        summary.push_str(&format!(" · {kept_count} kept"));
+    }
     View {
         screen: Screen::Devices,
         chip: "OpenRGB connected".into(),
         chip_warn: false,
         heading: String::new(),
         message: String::new(),
-        summary: format!("{} · {}", plural(snapshot.devices.len(), "device"), plural(lights, "light")),
-        rows: rows(&snapshot.devices),
+        summary,
+        notice,
+        notice_warn,
+        rows: rows(&snapshot.devices, kept),
     }
 }
 
-fn rows(devices: &[Device]) -> Vec<Row> {
+/// The result of the last Keep or Put back, shown until the next action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    pub text: String,
+    pub warn: bool,
+}
+
+fn rows(devices: &[Device], setup: Option<&Setup>) -> Vec<Row> {
     let mut totals: HashMap<Kind, usize> = HashMap::new();
     for d in devices {
         *totals.entry(d.kind).or_default() += 1;
@@ -104,9 +164,46 @@ fn rows(devices: &[Device]) -> Vec<Row> {
             } else {
                 "Can't save a color to itself, so it resets whenever it loses power.".to_string()
             };
-            Row { name, product: d.name.clone(), meta, zones, note, swatch: d.lit_color().map(|c| (c.r, c.g, c.b)) }
+            let (status, status_text) = status(d, setup.and_then(|s| s.find(d)));
+            let capture = Kept::capture(d);
+            let can_keep = setup.is_some() && capture.is_ok();
+            let status_text = match (&capture, status) {
+                (Err(KeepError::AllOff), Status::NotKept) => {
+                    "Every light is off. Set a color in OpenRGB to keep it.".to_string()
+                }
+                (Err(e), Status::NotKept) => e.to_string(),
+                _ => status_text,
+            };
+            Row {
+                name_key: d.name.clone(),
+                location_key: d.location.clone(),
+                name,
+                product: d.name.clone(),
+                meta,
+                zones,
+                note,
+                swatch: d.lit_color().map(|c| (c.r, c.g, c.b)),
+                status,
+                status_text,
+                can_keep,
+            }
         })
         .collect()
+}
+
+fn status(d: &Device, kept: Option<&Kept>) -> (Status, String) {
+    let Some(k) = kept else { return (Status::NotKept, String::new()) };
+    let what = match k.main_color() {
+        Some(c) => format!("{} in {}", k.mode.name, c.hex()),
+        None => k.mode.name.clone(),
+    };
+    match k.fit(d) {
+        Fit::Same => (Status::Kept, format!("Kept: {what}.")),
+        Fit::Differs => (Status::Differs, format!("Showing something other than what you kept ({what}).")),
+        Fit::Incompatible(reason) => {
+            (Status::Changed, format!("Kept setup no longer fits: {reason}. Keep it again to update it."))
+        }
+    }
 }
 
 fn message(chip: &str, heading: &str, message: &str) -> View {
@@ -117,6 +214,8 @@ fn message(chip: &str, heading: &str, message: &str) -> View {
         heading: heading.to_string(),
         message: message.to_string(),
         summary: String::new(),
+        notice: String::new(),
+        notice_warn: false,
         rows: Vec::new(),
     }
 }
@@ -127,7 +226,7 @@ fn plural(n: usize, word: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use keeplight_core::device::{Mode, Rgb, Zone};
+    use keeplight_core::device::{Mode, Rgb, Zone, color_mode};
 
     use super::*;
 
@@ -137,8 +236,13 @@ mod tests {
             kind,
             name: name.into(),
             vendor: String::new(),
-            location: String::new(),
-            modes: vec![Mode { name: mode.into(), flags: if saves { 1 << 8 } else { 0 } }],
+            location: format!("{name} location"),
+            modes: vec![Mode {
+                name: mode.into(),
+                flags: if saves { 1 << 8 } else { 0 },
+                color_mode: color_mode::PER_LED,
+                ..Mode::default()
+            }],
             active_mode: Some(0),
             zones: vec![Zone { name: "Main".into(), led_count: colors.len() as u32, matrix: None }],
             colors,
@@ -146,10 +250,19 @@ mod tests {
     }
 
     const RED: Rgb = Rgb { r: 255, g: 0, b: 0 };
+    const BLUE: Rgb = Rgb { r: 0, g: 0, b: 255 };
+
+    fn snap(devices: Vec<Device>) -> Result<Snapshot, String> {
+        Ok(Snapshot { server_protocol: 6, devices })
+    }
+
+    fn empty() -> SetupView {
+        Ok(Setup::default())
+    }
 
     #[test]
     fn unreachable_server_explains_where_it_looked() {
-        let v = build(&Err("refused".into()), "127.0.0.1:6742");
+        let v = build(&Err("refused".into()), &empty(), "127.0.0.1:6742", None);
         assert_eq!(v.screen, Screen::Message);
         assert!(v.chip_warn);
         assert!(v.message.contains("127.0.0.1:6742"));
@@ -158,23 +271,20 @@ mod tests {
 
     #[test]
     fn no_devices_is_its_own_message() {
-        let v = build(&Ok(Snapshot { server_protocol: 6, devices: vec![] }), "a");
+        let v = build(&snap(vec![]), &empty(), "a", None);
         assert_eq!(v.screen, Screen::Message);
         assert!(v.heading.contains("hasn't found any lights"));
     }
 
     #[test]
     fn devices_get_plain_names_numbered_by_kind() {
-        let snap = Snapshot {
-            server_protocol: 6,
-            devices: vec![
-                device(Kind::Ram, "ENE DRAM", "Chase Fade", vec![RED; 8], false),
-                device(Kind::Ram, "ENE DRAM", "Chase Fade", vec![RED; 8], false),
-                device(Kind::GraphicsCard, "EVGA RTX", "Direct", vec![RED; 4], true),
-                device(Kind::Keyboard, "Apex", "Direct", vec![Rgb::default(); 2], false),
-            ],
-        };
-        let v = build(&Ok(snap), "a");
+        let s = snap(vec![
+            device(Kind::Ram, "ENE DRAM", "Chase Fade", vec![RED; 8], false),
+            device(Kind::Ram, "ENE DRAM", "Chase Fade", vec![RED; 8], false),
+            device(Kind::GraphicsCard, "EVGA RTX", "Direct", vec![RED; 4], true),
+            device(Kind::Keyboard, "Apex", "Direct", vec![Rgb::default(); 2], false),
+        ]);
+        let v = build(&s, &empty(), "a", None);
         assert_eq!(v.screen, Screen::Devices);
         assert_eq!(v.summary, "4 devices · 22 lights");
         let names: Vec<_> = v.rows.iter().map(|r| r.name.as_str()).collect();
@@ -190,10 +300,9 @@ mod tests {
     fn mostly_dark_device_with_some_lit_keys_is_not_off() {
         let mut colors = vec![Rgb::default(); 100];
         colors[0] = RED;
-        let snap =
-            Snapshot { server_protocol: 6, devices: vec![device(Kind::Keyboard, "Apex", "Direct", colors, false)] };
-        let v = build(&Ok(snap), "a");
+        let v = build(&snap(vec![device(Kind::Keyboard, "Apex", "Direct", colors, false)]), &empty(), "a", None);
         assert_eq!(v.rows[0].swatch, Some((255, 0, 0)));
+        assert!(v.rows[0].can_keep);
     }
 
     #[test]
@@ -203,8 +312,60 @@ mod tests {
             Zone { name: "Board".into(), led_count: 4, matrix: None },
             Zone { name: "Header 1".into(), led_count: 2, matrix: None },
         ];
-        let v = build(&Ok(Snapshot { server_protocol: 6, devices: vec![d] }), "a");
+        let v = build(&snap(vec![d]), &empty(), "a", None);
         assert_eq!(v.rows[0].zones, "Board 4 · Header 1 2");
         assert_eq!(v.summary, "1 device · 6 lights");
+    }
+
+    #[test]
+    fn rows_show_how_each_device_stands_against_what_was_kept() {
+        let red = device(Kind::Ram, "ENE DRAM", "Chase Fade", vec![RED; 8], false);
+        let mut setup = Setup::default();
+        setup.keep(Kept::capture(&red).unwrap());
+        let gpu = device(Kind::GraphicsCard, "EVGA RTX", "Direct", vec![RED; 4], true);
+        let mut blue = red.clone();
+        blue.colors = vec![BLUE; 8];
+
+        let v = build(&snap(vec![red.clone(), gpu.clone()]), &Ok(setup.clone()), "a", None);
+        assert_eq!(v.summary, "2 devices · 12 lights · 1 kept");
+        assert_eq!(v.rows[0].status, Status::Kept);
+        assert_eq!(v.rows[0].status_text, "Kept: Chase Fade in #ff0000.");
+        assert_eq!(v.rows[1].status, Status::NotKept);
+        assert!(v.rows[1].can_keep);
+
+        let v = build(&snap(vec![blue]), &Ok(setup.clone()), "a", None);
+        assert_eq!(v.rows[0].status, Status::Differs);
+
+        let mut more = red.clone();
+        more.colors.push(RED);
+        let v = build(&snap(vec![more]), &Ok(setup), "a", None);
+        assert_eq!(v.rows[0].status, Status::Changed);
+        assert!(v.rows[0].status_text.contains("9 lights"));
+    }
+
+    #[test]
+    fn a_dark_device_says_why_it_cant_be_kept() {
+        let dark = device(Kind::Keyboard, "Apex", "Direct", vec![Rgb::default(); 4], false);
+        let v = build(&snap(vec![dark]), &empty(), "a", None);
+        assert!(!v.rows[0].can_keep);
+        assert!(v.rows[0].status_text.contains("Every light is off"));
+    }
+
+    #[test]
+    fn an_unusable_setup_turns_keeping_off_and_says_so() {
+        let red = device(Kind::Ram, "ENE DRAM", "Chase Fade", vec![RED; 8], false);
+        let notice = Notice { text: "Kept RAM stick 1.".into(), warn: false };
+        let v = build(&snap(vec![red]), &Err("it isn't valid JSON".into()), "a", Some(&notice));
+        assert!(v.notice_warn);
+        assert!(v.notice.contains("it isn't valid JSON"));
+        assert!(!v.rows[0].can_keep);
+    }
+
+    #[test]
+    fn the_last_action_shows_as_a_notice() {
+        let notice = Notice { text: "Put back RAM stick 1.".into(), warn: false };
+        let v = build(&snap(vec![]), &empty(), "a", Some(&notice));
+        assert_eq!(v.notice, "Put back RAM stick 1.");
+        assert!(!v.notice_warn);
     }
 }
