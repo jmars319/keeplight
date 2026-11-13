@@ -56,7 +56,8 @@ pub fn sign_in(current: Option<&str>, this_exe: Option<&str>, kept: usize) -> (b
         );
     }
     let note = if kept > 0 {
-        "Each time you sign in, Keeplight puts your kept devices back without opening this window."
+        "Keeplight puts your kept devices back at sign-in, after sleep and when OpenRGB's devices change, without \
+         opening this window."
     } else {
         "On, but nothing is kept yet, so there is nothing to put back."
     };
@@ -407,12 +408,12 @@ mod tests {
         assert!(!on && note.starts_with("Off: kept devices"));
         assert!(sign_in(None, Some(exe), 0).1.contains("Keep a device first"));
         let (on, note) = sign_in(Some(exe), Some(exe), 2);
-        assert!(on && note.starts_with("Each time you sign in"));
+        assert!(on && note.contains("after sleep"));
         assert!(sign_in(Some(exe), Some(exe), 0).1.contains("nothing is kept yet"));
         let other = r#""C:\dev\target\debug\keeplight.exe" --keep"#;
         let (on, note) = sign_in(Some(other), Some(exe), 2);
         assert!(on && note.contains("another copy") && note.contains("debug"));
-        assert!(sign_in(Some(&exe.to_uppercase()), Some(exe), 1).1.starts_with("Each time"), "paths ignore case");
+        assert!(sign_in(Some(&exe.to_uppercase()), Some(exe), 1).1.contains("after sleep"), "paths ignore case");
     }
 
     #[test]

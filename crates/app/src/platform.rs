@@ -79,6 +79,99 @@ impl Drop for SingleInstance {
     }
 }
 
+/// Sends `Wake` on `triggers` each time Windows resumes from sleep, for the
+/// life of the process. Returns false when Windows refused the registration.
+#[cfg(windows)]
+pub fn on_wake(triggers: std::sync::mpsc::Sender<keeplight_core::keeper::Trigger>) -> bool {
+    use std::sync::Mutex;
+    use windows::Win32::System::Power::{DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS, PowerRegisterSuspendResumeNotification};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DEVICE_NOTIFY_CALLBACK, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
+    };
+
+    static WAKE: Mutex<Option<std::sync::mpsc::Sender<keeplight_core::keeper::Trigger>>> = Mutex::new(None);
+
+    unsafe extern "system" fn resumed(
+        _context: *const core::ffi::c_void,
+        kind: u32,
+        _setting: *const core::ffi::c_void,
+    ) -> u32 {
+        if (kind == PBT_APMRESUMEAUTOMATIC || kind == PBT_APMRESUMESUSPEND)
+            && let Ok(guard) = WAKE.lock()
+            && let Some(tx) = guard.as_ref()
+        {
+            let _ = tx.send(keeplight_core::keeper::Trigger::Wake);
+        }
+        0
+    }
+
+    *WAKE.lock().unwrap_or_else(|e| e.into_inner()) = Some(triggers);
+    // Windows keeps a pointer to the parameters while registered, so they live
+    // as long as the process.
+    let params: &'static mut DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS =
+        Box::leak(Box::new(DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
+            Callback: Some(resumed),
+            Context: std::ptr::null_mut(),
+        }));
+    let mut registration = std::ptr::null_mut();
+    // SAFETY: with DEVICE_NOTIFY_CALLBACK the recipient is a pointer to the
+    // parameters, which never move or drop.
+    let status = unsafe {
+        PowerRegisterSuspendResumeNotification(
+            DEVICE_NOTIFY_CALLBACK,
+            windows::Win32::Foundation::HANDLE(std::ptr::from_mut(params).cast()),
+            &mut registration,
+        )
+    };
+    status.is_ok()
+}
+
+/// A named event the window sets to stop a running keeper, so turning the
+/// sign-in switch off takes effect at once.
+pub mod keeper_stop {
+    const NAME: &str = "Local\\Keeplight.Keeper.Stop";
+
+    /// Calls `on_stop` on a background thread when the event is set. For the
+    /// keeper itself.
+    #[cfg(windows)]
+    pub fn listen(on_stop: impl FnOnce() + Send + 'static) {
+        use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
+        let name = super::wide(NAME);
+        // SAFETY: a NUL-terminated name that outlives the call.
+        let Ok(event) = (unsafe { CreateEventW(None, false, false, windows::core::PCWSTR(name.as_ptr())) }) else {
+            return;
+        };
+        let raw = event.0 as usize;
+        std::thread::spawn(move || {
+            // SAFETY: the handle stays open for the life of the process.
+            unsafe { WaitForSingleObject(windows::Win32::Foundation::HANDLE(raw as *mut _), INFINITE) };
+            on_stop();
+        });
+    }
+
+    /// Asks a running keeper to stop. Nothing to do when none is running.
+    #[cfg(windows)]
+    pub fn request() {
+        use windows::Win32::System::Threading::{EVENT_MODIFY_STATE, OpenEventW, SetEvent};
+        let name = super::wide(NAME);
+        // SAFETY: a NUL-terminated name; the handle is closed after use.
+        unsafe {
+            if let Ok(event) = OpenEventW(EVENT_MODIFY_STATE, false, windows::core::PCWSTR(name.as_ptr())) {
+                let _ = SetEvent(event);
+                let _ = windows::Win32::Foundation::CloseHandle(event);
+            }
+        }
+    }
+}
+
+/// Starts this exe as a keeper in the background, with no window.
+pub fn start_keeper() -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new(std::env::current_exe()?).arg("--keep").creation_flags(CREATE_NO_WINDOW).spawn()?;
+    Ok(())
+}
+
 /// The per-user startup entry that runs the keeper at sign-in:
 /// `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `Keeplight`.
 pub mod startup {

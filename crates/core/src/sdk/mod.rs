@@ -107,6 +107,36 @@ impl Client {
         self.send(device, packet::UPDATE_LEDS, &wire::update_leds(colors))
     }
 
+    /// Waits up to `wait` for a packet the server sends on its own, such as
+    /// `DEVICE_LIST_UPDATED`, and returns its id; `None` when nothing came.
+    /// Use on a connection that sends no requests of its own.
+    pub fn next_notice(&mut self, wait: Duration) -> Result<Option<u32>, SdkError> {
+        // Only the first byte waits for `wait`; once a packet has started, the
+        // rest is read with the normal timeout so it is never cut in half.
+        let mut first = [0u8; 1];
+        self.stream.set_read_timeout(Some(wait.max(Duration::from_millis(1))))?;
+        let started = self.stream.read(&mut first);
+        self.stream.set_read_timeout(Some(IO_TIMEOUT))?;
+        match started {
+            Ok(0) => return Err(SdkError::Io(std::io::ErrorKind::UnexpectedEof.into())),
+            Ok(_) => {}
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+                return Ok(None);
+            }
+            Err(e) => return Err(e.into()),
+        }
+        let mut head = [0u8; HEADER_LEN];
+        head[0] = first[0];
+        self.stream.read_exact(&mut head[1..])?;
+        let header = wire::decode_header(&head)?;
+        if header.size > MAX_PAYLOAD {
+            return Err(SdkError::Protocol(format!("a {} byte notice", header.size)));
+        }
+        let mut payload = vec![0u8; header.size as usize];
+        self.stream.read_exact(&mut payload)?;
+        Ok(Some(header.id))
+    }
+
     pub fn snapshot(&mut self) -> Result<Snapshot, SdkError> {
         let count = self.controller_count()?;
         let devices = (0..count).map(|i| self.controller(i)).collect::<Result<Vec<_>, _>>()?;

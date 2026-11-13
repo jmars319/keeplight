@@ -119,15 +119,22 @@ fn run_command(command: &Command, address: &str, setup_path: &Path) -> view::Not
         Command::SignIn(on) => {
             use crate::platform::startup;
             let result = if *on {
-                startup::command_for_this_exe().and_then(|c| startup::set(Some(&c)))
+                // Start the keeper now too, rather than at the next sign-in.
+                startup::command_for_this_exe()
+                    .and_then(|c| startup::set(Some(&c)))
+                    .and_then(|()| crate::platform::start_keeper())
             } else {
+                crate::platform::keeper_stop::request();
                 startup::set(None)
             };
             match (result, on) {
-                (Ok(()), true) => {
-                    note("Keeplight will put your kept devices back each time you sign in.".into(), false)
-                }
-                (Ok(()), false) => note("Keeplight won't run at sign-in any more.".into(), false),
+                (Ok(()), true) => note(
+                    "The keeper is running. It puts your kept devices back at each sign-in, after sleep and when \
+                     OpenRGB's devices change."
+                        .into(),
+                    false,
+                ),
+                (Ok(()), false) => note("The keeper has stopped and won't run at sign-in.".into(), false),
                 (Err(e), _) => note(format!("Couldn't change the sign-in setting. {e}"), true),
             }
         }

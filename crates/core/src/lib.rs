@@ -9,6 +9,7 @@
 
 pub mod device;
 pub mod keep;
+pub mod keeper;
 pub mod sdk;
 
 #[cfg(any(test, feature = "testing"))]
