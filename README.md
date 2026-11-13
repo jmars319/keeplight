@@ -18,9 +18,9 @@ Early development, nothing released yet. Stage 02, the keeper, is being built:
 - **Keep this** saves what a device shows now into Keeplight's own setup file. Set colors in OpenRGB first; a color picker comes in a later stage.
 - **Put back** appears when a kept device shows something else, and sends that one device its kept mode and colors.
 
-- **Put kept lights back when you sign in** turns on a startup entry that runs `keeplight --keep`, which puts every kept device back with no window and logs what it did to `%LOCALAPPDATA%\Keeplight\keeper.log`. Off until you turn it on.
+- **Put kept lights back when you sign in** starts the keeper, `keeplight --keep`, now and at every sign-in. It has no window. It puts every kept device back when it starts, after the PC wakes, when OpenRGB's device list changes and when OpenRGB comes back after a restart, and logs each run to `%LOCALAPPDATA%\Keeplight\keeper.log`. Off until you turn it on; turning it off stops the keeper.
 
-Putting kept devices back after sleep and when a device reconnects comes next. See the plan page.
+A notification when a device doesn't take its color, and an optional tray icon, come next. See the plan page.
 
 ## Build from source
 

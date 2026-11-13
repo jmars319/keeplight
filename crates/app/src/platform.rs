@@ -129,14 +129,16 @@ pub fn on_wake(triggers: std::sync::mpsc::Sender<keeplight_core::keeper::Trigger
 /// A named event the window sets to stop a running keeper, so turning the
 /// sign-in switch off takes effect at once.
 pub mod keeper_stop {
-    const NAME: &str = "Local\\Keeplight.Keeper.Stop";
+    fn name() -> String {
+        format!("{}.Stop", super::keeper_name())
+    }
 
     /// Calls `on_stop` on a background thread when the event is set. For the
     /// keeper itself.
     #[cfg(windows)]
     pub fn listen(on_stop: impl FnOnce() + Send + 'static) {
         use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
-        let name = super::wide(NAME);
+        let name = super::wide(&name());
         // SAFETY: a NUL-terminated name that outlives the call.
         let Ok(event) = (unsafe { CreateEventW(None, false, false, windows::core::PCWSTR(name.as_ptr())) }) else {
             return;
@@ -153,7 +155,7 @@ pub mod keeper_stop {
     #[cfg(windows)]
     pub fn request() {
         use windows::Win32::System::Threading::{EVENT_MODIFY_STATE, OpenEventW, SetEvent};
-        let name = super::wide(NAME);
+        let name = super::wide(&name());
         // SAFETY: a NUL-terminated name; the handle is closed after use.
         unsafe {
             if let Ok(event) = OpenEventW(EVENT_MODIFY_STATE, false, windows::core::PCWSTR(name.as_ptr())) {
@@ -162,6 +164,12 @@ pub mod keeper_stop {
             }
         }
     }
+}
+
+/// The keeper's mutex name. Follows the startup entry's name, so a smoke test
+/// that renames the entry also gets its own keeper and never stops yours.
+pub fn keeper_name() -> String {
+    format!("Local\\{}.Keeper", startup::value_name())
 }
 
 /// Starts this exe as a keeper in the background, with no window.
@@ -186,7 +194,7 @@ pub mod startup {
 
     /// The value's name: `Keeplight`, or `KEEPLIGHT_STARTUP_NAME` when set, so
     /// the smoke test can click the switch without touching the real entry.
-    fn value_name() -> String {
+    pub fn value_name() -> String {
         std::env::var("KEEPLIGHT_STARTUP_NAME").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| "Keeplight".into())
     }
 

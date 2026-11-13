@@ -19,7 +19,7 @@ use crate::sdk::{Client, SdkError};
 /// Why the keeper is putting devices back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trigger {
-    SignIn,
+    Start,
     Wake,
     DevicesChanged,
     OpenRgbBack,
@@ -29,7 +29,7 @@ impl Trigger {
     /// The end of a log sentence: "Put back 2 of 2 kept devices {reason}."
     pub fn reason(self) -> &'static str {
         match self {
-            Trigger::SignIn => "at sign-in",
+            Trigger::Start => "when the keeper started",
             Trigger::Wake => "after the PC woke",
             Trigger::DevicesChanged => "after OpenRGB's device list changed",
             Trigger::OpenRgbBack => "after OpenRGB came back",
@@ -40,7 +40,7 @@ impl Trigger {
     /// telling one: waking explains a device-list change, not the other way.
     fn rank(self) -> u8 {
         match self {
-            Trigger::SignIn => 3,
+            Trigger::Start => 3,
             Trigger::Wake => 2,
             Trigger::OpenRgbBack => 1,
             Trigger::DevicesChanged => 0,

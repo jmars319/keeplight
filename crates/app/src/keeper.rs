@@ -13,7 +13,7 @@ use keeplight_core::keep::{ActionError, Outcome, Run};
 use keeplight_core::keeper::{self, Timing, Trigger};
 
 pub fn run() -> i32 {
-    let Some(_only) = crate::platform::SingleInstance::acquire("Local\\Keeplight.Keeper") else {
+    let Some(_only) = crate::platform::SingleInstance::acquire(&crate::platform::keeper_name()) else {
         return 0;
     };
     let address = crate::platform::openrgb_address();
@@ -22,7 +22,7 @@ pub fn run() -> i32 {
     let timing = Timing { wait: Duration::from_secs(120), ..Timing::default() };
 
     let (tx, rx) = mpsc::channel();
-    let _ = tx.send(Trigger::SignIn);
+    let _ = tx.send(Trigger::Start);
     let stop = keeper::stop_flag();
     {
         let (tx, stop, address) = (tx.clone(), stop.clone(), address.clone());
@@ -120,8 +120,8 @@ mod tests {
             ],
             waited: Duration::from_secs(9),
         };
-        let lines = log_lines("T", Trigger::SignIn, &Ok(run));
-        assert_eq!(lines[0], "T  Put back 1 of 3 kept devices at sign-in, after waiting 9 s for OpenRGB.");
+        let lines = log_lines("T", Trigger::Start, &Ok(run));
+        assert_eq!(lines[0], "T  Put back 1 of 3 kept devices when the keeper started, after waiting 9 s for OpenRGB.");
         assert_eq!(lines[1], "    ENE DRAM at 0x73: not sent: OpenRGB doesn't list it");
         assert_eq!(lines[2], "    ENE DRAM at 0x75: sent, but it reads back as something else");
     }
