@@ -40,6 +40,17 @@ pub fn run() -> i32 {
             std::process::exit(0);
         }
     });
+    // The keeper runs only while the sign-in switch is on. Checked after the
+    // stop listener exists: the window removes the entry before it signals
+    // stop, so a switch turned off while this keeper was starting is caught
+    // here or by the listener, never missed by both.
+    if crate::platform::startup::current().is_none() {
+        let _ = crate::platform::append_log(&[format!(
+            "{}  Didn't start: the sign-in switch is off.",
+            crate::platform::local_timestamp()
+        )]);
+        return 0;
+    }
     if !wake {
         let _ = crate::platform::append_log(&[format!(
             "{}  Windows didn't accept the wake notification, so kept devices are put back at sign-in and \

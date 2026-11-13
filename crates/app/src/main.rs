@@ -6,7 +6,7 @@ mod platform;
 
 slint::include_modules!();
 
-const USAGE: &str = "keeplight             Open Keeplight\nkeeplight --keep      Put back every kept device, with no window\nkeeplight --version   Show the version";
+const USAGE: &str = "keeplight             Open Keeplight\nkeeplight --keep      Run the keeper, with no window (only while the sign-in switch is on)\nkeeplight --version   Show the version";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

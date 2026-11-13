@@ -38,7 +38,7 @@ Tests against a fake server hold this, including `put_back_all_restores_every_ke
 
 ## Processes
 
-- `keeplight.exe --keep`, the keeper. It has no window and is started by Windows at sign-in when the switch is on, or by the window the moment you turn the switch on. Each time it puts kept devices back, it waits up to 2 minutes for OpenRGB to list them all, then logs the result. It stays running until you sign out:
+- `keeplight.exe --keep`, the keeper. It has no window and is started by Windows at sign-in when the switch is on, or by the window the moment you turn the switch on. It runs only while the switch is on: once its stop listener is set up, it checks that the startup entry still exists, and exits without changing anything if it doesn't. Turning the switch off removes the entry before it signals stop, so a keeper that is still starting can't miss it. Each time it puts kept devices back, it waits up to 2 minutes for OpenRGB to list them all, then logs the result. It stays running until you sign out:
   - it registers with Windows for the resume-from-sleep notice (`PowerRegisterSuspendResumeNotification`);
   - it listens to OpenRGB as above;
   - triggers that arrive within 3 seconds of each other become one run.

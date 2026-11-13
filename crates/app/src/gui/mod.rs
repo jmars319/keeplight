@@ -124,8 +124,11 @@ fn run_command(command: &Command, address: &str, setup_path: &Path) -> view::Not
                     .and_then(|c| startup::set(Some(&c)))
                     .and_then(|()| crate::platform::start_keeper())
             } else {
+                // Entry first, then the signal: a keeper still starting up
+                // sees the entry gone (see keeper::run).
+                let removed = startup::set(None);
                 crate::platform::keeper_stop::request();
-                startup::set(None)
+                removed
             };
             match (result, on) {
                 (Ok(()), true) => note(
