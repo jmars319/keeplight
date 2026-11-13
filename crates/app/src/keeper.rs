@@ -1,43 +1,86 @@
-//! `keeplight --keep`: the keeper, with no window. Run at sign-in by the
-//! startup entry, it puts back every kept device through
-//! `keeplight_core::keep::put_back_all`, writes what happened to the log and
-//! exits. Re-applying after sleep and on device changes comes in a later
-//! version.
+//! `keeplight --keep`: the keeper, with no window. Started at sign-in by the
+//! startup entry (or by the window when the switch is turned on), it puts
+//! back every kept device, then stays running and does it again whenever the
+//! PC wakes, OpenRGB's device list changes or OpenRGB comes back after a
+//! restart. The work is `keeplight_core::keeper`; this module wires it to
+//! Windows and writes the log.
 
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use keeplight_core::keep::{ActionError, Outcome, Run};
-
-/// How long to wait at sign-in for OpenRGB to start and list every kept
-/// device. On this PC the service answers within seconds, but its device scan
-/// can lag behind the desktop.
-const WAIT: Duration = Duration::from_secs(120);
-const POLL: Duration = Duration::from_secs(3);
+use keeplight_core::keeper::{self, Timing, Trigger};
 
 pub fn run() -> i32 {
-    let Some(_only) = crate::platform::SingleInstance::acquire("Local\\Keeplight.Keeper") else {
+    let Some(_only) = crate::platform::SingleInstance::acquire(&crate::platform::keeper_name()) else {
         return 0;
     };
     let address = crate::platform::openrgb_address();
-    let result = keeplight_core::keep::put_back_all(&address, &crate::platform::setup_path(), WAIT, POLL);
-    // Nothing kept and nothing wrong: nothing worth a log line.
-    if matches!(&result, Ok(run) if run.reports.is_empty()) {
+    let setup_path = crate::platform::setup_path();
+    // At sign-in OpenRGB's device scan can lag behind the desktop.
+    let timing = Timing { wait: Duration::from_secs(120), ..Timing::default() };
+
+    let (tx, rx) = mpsc::channel();
+    let _ = tx.send(Trigger::Start);
+    let stop = keeper::stop_flag();
+    {
+        let (tx, stop, address) = (tx.clone(), stop.clone(), address.clone());
+        std::thread::spawn(move || keeper::watch(&address, &tx, &stop, timing));
+    }
+    let wake = crate::platform::on_wake(tx.clone());
+    crate::platform::keeper_stop::listen({
+        let stop = stop.clone();
+        move || {
+            stop.store(true, Ordering::Relaxed);
+            let _ = crate::platform::append_log(&[format!(
+                "{}  Stopped: the sign-in switch was turned off.",
+                crate::platform::local_timestamp()
+            )]);
+            std::process::exit(0);
+        }
+    });
+    // The keeper runs only while the sign-in switch is on. Checked after the
+    // stop listener exists: the window removes the entry before it signals
+    // stop, so a switch turned off while this keeper was starting is caught
+    // here or by the listener, never missed by both.
+    if crate::platform::startup::current().is_none() {
+        let _ = crate::platform::append_log(&[format!(
+            "{}  Didn't start: the sign-in switch is off.",
+            crate::platform::local_timestamp()
+        )]);
         return 0;
     }
-    let _ = crate::platform::append_log(&log_lines(&crate::platform::local_timestamp(), &result));
+    if !wake {
+        let _ = crate::platform::append_log(&[format!(
+            "{}  Windows didn't accept the wake notification, so kept devices are put back at sign-in and \
+             when OpenRGB's devices change, but not after sleep.",
+            crate::platform::local_timestamp()
+        )]);
+    }
+    drop(tx);
+
+    keeper::run(&address, &setup_path, &rx, timing, |why, result| {
+        // Nothing kept and nothing wrong: nothing worth a log line.
+        if !matches!(result, Ok(run) if run.reports.is_empty()) {
+            let _ = crate::platform::append_log(&log_lines(&crate::platform::local_timestamp(), why, result));
+        }
+    });
     0
 }
 
 /// The log entry: one summary line, then an indented line for each device
 /// that didn't hold.
-pub fn log_lines(when: &str, result: &Result<Run, ActionError>) -> Vec<String> {
+pub fn log_lines(when: &str, why: Trigger, result: &Result<Run, ActionError>) -> Vec<String> {
+    let reason = why.reason();
     let run = match result {
         Ok(run) => run,
-        Err(e) => return vec![format!("{when}  Put back nothing: {e}")],
+        Err(e) => return vec![format!("{when}  Put back nothing {reason}: {e}")],
     };
     let total = run.reports.len();
     let held = run.held();
-    let mut summary = format!("{when}  Put back {held} of {total} kept device{}", if total == 1 { "" } else { "s" });
+    let mut summary =
+        format!("{when}  Put back {held} of {total} kept device{} {reason}", if total == 1 { "" } else { "s" });
     let waited = run.waited.as_secs();
     if waited > 0 {
         summary.push_str(&format!(", after waiting {waited} s for OpenRGB"));
@@ -67,12 +110,15 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_run_is_one_line() {
+    fn a_clean_run_is_one_line_with_its_reason() {
         let run = Run {
             reports: vec![report("0x71", Ok(Outcome::Held)), report("0x73", Ok(Outcome::Held))],
             waited: Duration::ZERO,
         };
-        assert_eq!(log_lines("2026-11-13 21:00:00", &Ok(run)), ["2026-11-13 21:00:00  Put back 2 of 2 kept devices."]);
+        assert_eq!(
+            log_lines("2026-11-13 21:00:00", Trigger::Wake, &Ok(run)),
+            ["2026-11-13 21:00:00  Put back 2 of 2 kept devices after the PC woke."]
+        );
     }
 
     #[test]
@@ -85,16 +131,16 @@ mod tests {
             ],
             waited: Duration::from_secs(9),
         };
-        let lines = log_lines("T", &Ok(run));
-        assert_eq!(lines[0], "T  Put back 1 of 3 kept devices, after waiting 9 s for OpenRGB.");
+        let lines = log_lines("T", Trigger::Start, &Ok(run));
+        assert_eq!(lines[0], "T  Put back 1 of 3 kept devices when the keeper started, after waiting 9 s for OpenRGB.");
         assert_eq!(lines[1], "    ENE DRAM at 0x73: not sent: OpenRGB doesn't list it");
         assert_eq!(lines[2], "    ENE DRAM at 0x75: sent, but it reads back as something else");
     }
 
     #[test]
     fn a_failed_run_says_why() {
-        let lines = log_lines("T", &Err(ActionError::NotFound));
+        let lines = log_lines("T", Trigger::OpenRgbBack, &Err(ActionError::NotFound));
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].starts_with("T  Put back nothing: "));
+        assert!(lines[0].starts_with("T  Put back nothing after OpenRGB came back: "));
     }
 }

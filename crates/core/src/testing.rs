@@ -120,6 +120,8 @@ pub struct State {
     /// Device indexes that accept writes but don't change, like a device that
     /// failed to take a color.
     pub stuck: Vec<u32>,
+    /// Every connection, so the server can announce changes or hang up.
+    pub clients: Vec<TcpStream>,
 }
 
 /// An OpenRGB stand-in on a random 127.0.0.1 port. It answers the read
@@ -158,9 +160,31 @@ impl FakeServer {
     pub fn device(&self, index: usize) -> Device {
         self.state.lock().unwrap().devices[index].clone()
     }
+
+    /// Sends `DEVICE_LIST_UPDATED` to every connected client, as OpenRGB does
+    /// when a device comes or goes.
+    pub fn announce_device_change(&self) {
+        let mut st = self.state.lock().unwrap();
+        st.clients.retain_mut(|c| c.write_all(&wire::encode(0, packet::DEVICE_LIST_UPDATED, &[])).is_ok());
+    }
+
+    /// Hangs up on every client, as a restarting OpenRGB service would.
+    pub fn drop_clients(&self) {
+        for c in self.state.lock().unwrap().clients.drain(..) {
+            let _ = c.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
+    /// How many connections are open.
+    pub fn client_count(&self) -> usize {
+        self.state.lock().unwrap().clients.len()
+    }
 }
 
 fn serve(mut s: TcpStream, state: &Mutex<State>) {
+    if let Ok(clone) = s.try_clone() {
+        state.lock().unwrap().clients.push(clone);
+    }
     let mut protocol = 0;
     loop {
         let mut head = [0u8; HEADER_LEN];

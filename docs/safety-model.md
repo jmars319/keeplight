@@ -15,14 +15,16 @@ Reading, which happens every few seconds while the window is open:
 | `REQUEST_CONTROLLER_COUNT` (0) | How many devices there are. |
 | `REQUEST_CONTROLLER_DATA` (1) | Each device's name, modes, zones and current colors. |
 
-Changing a light, only when you press **Put back** on a device you kept, or at sign-in for every kept device when the sign-in switch is on:
+Changing a light, only when you press **Put back** on a device you kept, or, while the sign-in switch is on, for every kept device when the keeper starts, after the PC wakes, when OpenRGB says its device list changed, and when OpenRGB comes back after a restart:
 
 | Request | Why |
 | --- | --- |
 | `RGBCONTROLLER_UPDATEMODE` (1101) | Switches that one device to the mode you kept, with its kept settings. |
 | `RGBCONTROLLER_UPDATELEDS` (1050) | Sets that one device's lights to the colors you kept, when its mode colors each light itself. |
 
-Put back sends these only to the device you pressed it on, and only that device's own kept setup. At sign-in the keeper does the same for each kept device in turn, and nothing for any device that isn't kept. It sends nothing when the device no longer fits what was kept, for example when it reports a different number of lights. Afterwards it reads the device back. That read comes from OpenRGB's record of the device, so it shows that OpenRGB took the request, not that the hardware shows it: RAM that loses power falls back to its own effect without OpenRGB noticing until it scans again.
+Put back sends these only to the device you pressed it on, and only that device's own kept setup. The keeper does the same for each kept device in turn, and nothing for any device that isn't kept. It re-sends even when OpenRGB's record already matches, because after sleep that record can be wrong.
+
+While running, the keeper also holds a second connection that sends only `REQUEST_PROTOCOL_VERSION` and `SET_CLIENT_NAME`, then just listens for OpenRGB's own `DEVICE_LIST_UPDATED` (100) notices. It never sends a request that changes a light (`a_device_list_change_becomes_a_trigger`). It sends nothing when the device no longer fits what was kept, for example when it reports a different number of lights. Afterwards it reads the device back. That read comes from OpenRGB's record of the device, so it shows that OpenRGB took the request, not that the hardware shows it: RAM that loses power falls back to its own effect without OpenRGB noticing until it scans again.
 
 Keeplight never sends `RGBCONTROLLER_SAVEMODE`, which writes into a device's own memory, and never loads, saves or deletes OpenRGB profiles. On 2026-10-23 loading a saved OpenRGB profile turned a keyboard's lights off, because a profile holds every device, including ones nobody chose a color for.
 
@@ -36,8 +38,13 @@ Tests against a fake server hold this, including `put_back_all_restores_every_ke
 
 ## Processes
 
-- `keeplight.exe --keep`, started by Windows at sign-in when the switch is on. It has no window, waits up to 2 minutes for OpenRGB to list every kept device, puts them back, logs the result and exits. A named mutex (`Local\Keeplight.Keeper`) lets only one run at a time.
-- Keeplight starts no other process. The uninstaller stops a running `keeplight.exe` before removing it.
+- `keeplight.exe --keep`, the keeper. It has no window and is started by Windows at sign-in when the switch is on, or by the window the moment you turn the switch on. It runs only while the switch is on: once its stop listener is set up, it checks that the startup entry still exists, and exits without changing anything if it doesn't. Turning the switch off removes the entry before it signals stop, so a keeper that is still starting can't miss it. Each time it puts kept devices back, it waits up to 2 minutes for OpenRGB to list them all, then logs the result. It stays running until you sign out:
+  - it registers with Windows for the resume-from-sleep notice (`PowerRegisterSuspendResumeNotification`);
+  - it listens to OpenRGB as above;
+  - triggers that arrive within 3 seconds of each other become one run.
+- A named mutex (`Local\Keeplight.Keeper`) lets only one keeper run at a time.
+- A named event (`Local\Keeplight.Keeper.Stop`) is how the window stops it when you turn the switch off. Both names follow `KEEPLIGHT_STARTUP_NAME`, so a smoke test never stops your keeper.
+- The window starts no process except the keeper. The uninstaller stops a running `keeplight.exe` before removing it.
 
 ## Not done, by design
 

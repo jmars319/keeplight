@@ -119,8 +119,13 @@ try {
     Check 'button: a second Keep adds the keyboard' (Eventually { (Kept).Count -eq 2 })
     Click 'Put kept lights back when you sign in'
     Check 'switch: on registers this exe with --keep' (Eventually { (Entry $entry) -like '*keeplight.exe" --keep' })
+    # The keeper it starts inherits the fake server and the throwaway folder.
+    $log = Join-Path $work 'keeper.log'
+    function LogHas($pattern) { (Test-Path $log) -and [bool](Select-String -Path $log -Pattern $pattern -SimpleMatch) }
+    Check 'switch: on starts a keeper that puts back' (Eventually { LogHas 'Put back 2 of 2 kept devices when the keeper started.' })
     Click 'Put kept lights back when you sign in'
     Check 'switch: off removes the entry' (Eventually { $null -eq (Entry $entry) })
+    Check 'switch: off stops that keeper' (Eventually { LogHas 'Stopped: the sign-in switch was turned off.' })
     Check 'the real startup entry is untouched' ((Entry 'Keeplight') -eq $realBefore)
 } finally {
     Remove-ItemProperty -Path $run -Name $entry -ErrorAction SilentlyContinue
