@@ -11,6 +11,11 @@ pub fn openrgb_address() -> String {
         .unwrap_or_else(|| keeplight_core::sdk::DEFAULT_ADDRESS.to_string())
 }
 
+/// Keeplight's preferences, beside the setup file.
+pub fn settings_path() -> std::path::PathBuf {
+    setup_path().with_file_name("settings.json")
+}
+
 /// The keeper's log, beside the setup file.
 pub fn log_path() -> std::path::PathBuf {
     setup_path().with_file_name("keeper.log")

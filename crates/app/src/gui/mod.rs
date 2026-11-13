@@ -50,6 +50,7 @@ pub fn run() -> i32 {
             (v.sign_in, v.sign_in_note) =
                 view::sign_in(crate::platform::startup::current().as_deref(), this_exe.as_deref(), kept);
             v.last_run = crate::platform::last_keeper_run().unwrap_or_default();
+            v.tray_icon = keeplight_core::settings::Settings::load(&crate::platform::settings_path()).tray_icon;
             if weak.upgrade_in_event_loop(move |ui| apply(&ui, v)).is_err() {
                 return;
             }
@@ -78,6 +79,12 @@ pub fn run() -> i32 {
             let _ = tx.send(Command::SignIn(on));
         });
     }
+    {
+        let tx = tx.clone();
+        g.on_set_tray_icon(move |on| {
+            let _ = tx.send(Command::TrayIcon(on));
+        });
+    }
 
     let _repaint = repaint_after_restore(&ui);
     match ui.run() {
@@ -95,6 +102,8 @@ enum Command {
     PutBack(DeviceRow),
     /// Turn the keeper at sign-in on or off.
     SignIn(bool),
+    /// Show or hide the keeper's icon in the notification area.
+    TrayIcon(bool),
 }
 
 fn run_command(command: &Command, address: &str, setup_path: &Path) -> view::Notice {
@@ -141,6 +150,20 @@ fn run_command(command: &Command, address: &str, setup_path: &Path) -> view::Not
                 (Err(e), _) => note(format!("Couldn't change the sign-in setting. {e}"), true),
             }
         }
+        Command::TrayIcon(on) => {
+            let path = crate::platform::settings_path();
+            let mut settings = keeplight_core::settings::Settings::load(&path);
+            settings.tray_icon = *on;
+            match (settings.save(&path), on) {
+                (Ok(()), true) => note("The keeper's icon shows in the notification area while it runs.".into(), false),
+                (Ok(()), false) => note(
+                    "The keeper's icon is hidden. It still appears for a moment if a light doesn't take its color."
+                        .into(),
+                    false,
+                ),
+                (Err(e), _) => note(format!("Couldn't save the tray icon setting. {e}"), true),
+            }
+        }
     }
 }
 
@@ -150,6 +173,7 @@ fn apply(ui: &AppWindow, v: view::View) {
     g.set_sign_in(v.sign_in);
     g.set_sign_in_note(v.sign_in_note.into());
     g.set_last_run(v.last_run.into());
+    g.set_tray_icon(v.tray_icon);
     g.set_notice(v.notice.into());
     g.set_notice_warn(v.notice_warn);
     g.set_screen(match v.screen {

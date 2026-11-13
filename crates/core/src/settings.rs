@@ -1,0 +1,52 @@
+//! Keeplight's own preferences, apart from the setup of kept devices:
+//! `settings.json` beside the setup file. A missing or unreadable file means
+//! the defaults; it holds nothing that can't be chosen again in a click.
+
+use std::io;
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    /// Show the keeper's icon in the notification area. Off by default (owner
+    /// decision 2026-11-13); failures are still told by a notification.
+    pub tray_icon: bool,
+}
+
+impl Settings {
+    pub fn load(path: &Path) -> Settings {
+        std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    }
+
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut text = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
+        text.push('\n');
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(&tmp, path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_or_bad_files_are_the_defaults_and_saves_round_trip() {
+        let dir = std::env::temp_dir().join(format!("keeplight-test-{}-settings", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+        assert_eq!(Settings::load(&path), Settings::default());
+        Settings { tray_icon: true }.save(&path).unwrap();
+        assert!(Settings::load(&path).tray_icon);
+        std::fs::write(&path, "{ nope").unwrap();
+        assert_eq!(Settings::load(&path), Settings::default());
+        std::fs::write(&path, "{}").unwrap();
+        assert!(!Settings::load(&path).tray_icon, "fields added later default sensibly");
+    }
+}

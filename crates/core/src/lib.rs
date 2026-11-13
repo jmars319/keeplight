@@ -11,6 +11,7 @@ pub mod device;
 pub mod keep;
 pub mod keeper;
 pub mod sdk;
+pub mod settings;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

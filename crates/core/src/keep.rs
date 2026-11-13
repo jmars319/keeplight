@@ -277,6 +277,18 @@ pub struct Report {
     pub result: Result<Outcome, String>,
 }
 
+impl Report {
+    /// The device in a sentence: its product name and the end of its
+    /// location, such as "ENE DRAM, address 0x73".
+    pub fn label(&self) -> String {
+        match self.location.rsplit(", ").next().filter(|tail| tail.len() < self.location.len()) {
+            Some(tail) => format!("{}, {tail}", self.name),
+            None if self.location.len() <= 24 => format!("{} at {}", self.name, self.location),
+            None => self.name.clone(),
+        }
+    }
+}
+
 /// The result of putting back every kept device.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Run {

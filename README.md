@@ -20,7 +20,9 @@ Early development, nothing released yet. Stage 02, the keeper, is being built:
 
 - **Put kept lights back when you sign in** starts the keeper, `keeplight --keep`, now and at every sign-in. It has no window. It puts every kept device back when it starts, after the PC wakes, when OpenRGB's device list changes and when OpenRGB comes back after a restart, and logs each run to `%LOCALAPPDATA%\Keeplight\keeper.log`. Off until you turn it on; turning it off stops the keeper.
 
-A notification when a device doesn't take its color, and an optional tray icon, come next. See the plan page.
+- **A notification** tells you when the keeper couldn't put a kept device back, once per new problem. **Show the keeper's icon in the notification area** (off by default) keeps an icon there whose menu can open Keeplight or put kept lights back now.
+
+Stopping keeping a device, which hands it back to its own lighting, comes next. See the plan page.
 
 ## Build from source
 

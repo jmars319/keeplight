@@ -34,6 +34,7 @@ Tests against a fake server hold this, including `put_back_all_restores_every_ke
 
 - `%LOCALAPPDATA%\Keeplight\setup.json`, or `setup.json` in `KEEPLIGHT_DATA` when that is set: the devices you pressed **Keep this** on, each with its product name, location, light count, mode and colors. Written through a temporary file and a rename. A setup Keeplight can't read is never saved over; the window says so and turns Keep and Put back off.
 - `keeper.log` beside it: one line each time the keeper runs, saying how many kept devices it put back, plus a line for each that didn't hold. Trimmed to its last 400 lines once it passes 800.
+- `settings.json` beside it: Keeplight's preferences, today only whether the keeper shows its icon in the notification area (off by default). A missing or unreadable file means the defaults.
 - The startup entry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `Keeplight`, holding `"<path to keeplight.exe>" --keep`. Written only when you turn on **Put kept lights back when you sign in**, and removed when you turn it off or uninstall. `KEEPLIGHT_STARTUP_NAME` renames the value, which the smoke test uses so it never touches the real one.
 
 ## Processes
@@ -44,7 +45,9 @@ Tests against a fake server hold this, including `put_back_all_restores_every_ke
   - triggers that arrive within 3 seconds of each other become one run.
 - A named mutex (`Local\Keeplight.Keeper`) lets only one keeper run at a time.
 - A named event (`Local\Keeplight.Keeper.Stop`) is how the window stops it when you turn the switch off. Both names follow `KEEPLIGHT_STARTUP_NAME`, so a smoke test never stops your keeper.
-- The window starts no process except the keeper. The uninstaller stops a running `keeplight.exe` before removing it.
+- The keeper's icon in the notification area, from a hidden window on its own thread. It is shown while the keeper runs when **Show the keeper's icon in the notification area** is on, and re-checked every 2 seconds. Clicking it opens Keeplight. Its menu has **Open Keeplight** and **Put kept lights back now**, which puts back kept devices exactly as a wake does.
+- A Windows notification when a run leaves a kept device not put back, or can't reach OpenRGB. It is shown once when the problems appear or change, not again on every wake while they stay the same. With the icon off, the icon appears only for the notification and goes away when Windows closes it. Nothing is sent anywhere; the notification is local.
+- The window starts no process except the keeper, and the keeper's icon starts no process except the window. The uninstaller stops a running `keeplight.exe` before removing it.
 
 ## Not done, by design
 

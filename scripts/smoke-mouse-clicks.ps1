@@ -127,6 +127,12 @@ try {
     Check 'switch: off removes the entry' (Eventually { $null -eq (Entry $entry) })
     Check 'switch: off stops that keeper' (Eventually { LogHas 'Stopped: the sign-in switch was turned off.' })
     Check 'the real startup entry is untouched' ((Entry 'Keeplight') -eq $realBefore)
+    $settings = Join-Path $work 'settings.json'
+    function Tray { (Test-Path $settings) -and [bool](Get-Content $settings -Raw | ConvertFrom-Json).tray_icon }
+    Click "Show the keeper's icon in the notification area"
+    Check 'switch: tray icon on is saved' (Eventually { Tray })
+    Click "Show the keeper's icon in the notification area"
+    Check 'switch: tray icon off is saved' (Eventually { -not (Tray) })
 } finally {
     Remove-ItemProperty -Path $run -Name $entry -ErrorAction SilentlyContinue
     if ($p -and -not $p.HasExited) { $p.Kill(); $p.WaitForExit() }
