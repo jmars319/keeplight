@@ -16,7 +16,7 @@ use keeplight_core::keep::{HandBack, Outcome, Setup};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 
-use crate::{AppWindow, DeviceRow, Ui};
+use crate::{AppWindow, DeviceRow, Ui, ZoneItem};
 
 const REFRESH: Duration = Duration::from_secs(3);
 
@@ -67,14 +67,14 @@ pub fn run() -> i32 {
             }
         }
     });
-    let send = |make: fn(DeviceRow) -> Command| {
+    let send = |make: fn(Target) -> Command| {
         let tx = tx.clone();
         let weak = ui.as_weak();
         move |row: DeviceRow| {
             if let Some(ui) = weak.upgrade() {
                 ui.global::<Ui>().set_busy(true);
             }
-            let _ = tx.send(make(row));
+            let _ = tx.send(make(Target::of(&row)));
         }
     };
     g.on_keep(send(Command::Keep));
@@ -85,11 +85,11 @@ pub fn run() -> i32 {
     {
         let tx = tx.clone();
         let weak = ui.as_weak();
-        g.on_set_color(move |row, color| {
+        g.on_set_color(move |row, color, zone| {
             if let Some(ui) = weak.upgrade() {
                 ui.global::<Ui>().set_busy(true);
             }
-            let _ = tx.send(Command::SetColor(row, color.to_string()));
+            let _ = tx.send(Command::SetColor(Target::of(&row), color.to_string(), zone.to_string()));
         });
     }
     {
@@ -127,17 +127,32 @@ pub fn run() -> i32 {
     }
 }
 
-/// A button press, carrying the row it came from.
+/// The device a button press is for: its display name, for the notice, and
+/// its location, which finds it again. Rows hold Slint models, which stay on
+/// the window's thread, so only these go to the worker.
+struct Target {
+    name: String,
+    location: String,
+}
+
+impl Target {
+    fn of(row: &DeviceRow) -> Target {
+        Target { name: row.name.to_string(), location: row.location_key.to_string() }
+    }
+}
+
+/// A button press, carrying the device it is for.
 enum Command {
-    Keep(DeviceRow),
+    Keep(Target),
     /// Keep a device whose lights are all off, after the row asked.
-    KeepDark(DeviceRow),
-    PutBack(DeviceRow),
-    StopKeeping(DeviceRow),
+    KeepDark(Target),
+    PutBack(Target),
+    StopKeeping(Target),
     /// Keep a device again as it was before you stopped keeping it.
-    KeepAsBefore(DeviceRow),
-    /// Set a device to a color (#rrggbb) and keep it.
-    SetColor(DeviceRow, String),
+    KeepAsBefore(Target),
+    /// Set a device, or one zone of it (by name; empty for the whole device),
+    /// to a color (#rrggbb) and keep it.
+    SetColor(Target, String, String),
     /// Turn the keeper at sign-in on or off.
     SignIn(bool),
     /// Show or hide the keeper's icon in the notification area.
@@ -148,12 +163,12 @@ enum Command {
 
 /// A device button: the engine checks and makes the change, logs it as
 /// `gui`, and says what happened; this words it for the notice line.
-fn device_change(engine: &Engine, action: Action, row: &DeviceRow) -> view::Notice {
-    color_change(engine, Change::new(action, row.location_key.to_string()), row)
+fn device_change(engine: &Engine, action: Action, row: &Target) -> view::Notice {
+    color_change(engine, Change::new(action, row.location.clone()), row)
 }
 
 /// [device_change] for any change, including a new color.
-fn color_change(engine: &Engine, change: Change, row: &DeviceRow) -> view::Notice {
+fn color_change(engine: &Engine, change: Change, row: &Target) -> view::Notice {
     let note = |text: String, warn: bool| view::Notice { text, warn };
     let name = &row.name;
     let action = change.action;
@@ -229,8 +244,10 @@ fn run_command(command: &Command, engine: &Engine) -> view::Notice {
         Command::PutBack(row) => device_change(engine, Action::PutBack, row),
         Command::StopKeeping(row) => device_change(engine, Action::StopKeeping, row),
         Command::KeepAsBefore(row) => device_change(engine, Action::KeepAsBefore, row),
-        Command::SetColor(row, color) => {
-            color_change(engine, Change::set_color(row.location_key.to_string(), color.clone()), row)
+        Command::SetColor(row, color, zone) => {
+            let change = Change::set_color(row.location.clone(), color.clone());
+            let change = if zone.is_empty() { change } else { change.in_zone(zone.clone()) };
+            color_change(engine, change, row)
         }
         Command::AiChanges(on) => match (engine.set_ai_changes(*on), on) {
             (Ok(()), true) => note(
@@ -314,6 +331,24 @@ fn apply(ui: &AppWindow, v: view::View) {
             dark: r.dark,
             has_before: r.has_before,
             can_color: r.can_color,
+            can_color_zones: r.can_color_zones,
+            zone_choices: ModelRc::new(VecModel::from(
+                std::iter::once("Whole device".to_string())
+                    .chain(r.zone_items.iter().map(|z| z.name.clone()))
+                    .map(slint::SharedString::from)
+                    .collect::<Vec<_>>(),
+            )),
+            zone_list: ModelRc::new(VecModel::from(
+                r.zone_items
+                    .iter()
+                    .map(|z| ZoneItem {
+                        name: z.name.clone().into(),
+                        label: z.label.clone().into(),
+                        lit: z.swatch.is_some(),
+                        swatch: z.swatch.map_or(Color::from_rgb_u8(0, 0, 0), |(r, g, b)| Color::from_rgb_u8(r, g, b)),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
             own_lighting: r.own_lighting,
             lit_by: r.lit_by.into(),
             lit_by_warn: r.lit_by_warn,
@@ -333,16 +368,30 @@ fn apply(ui: &AppWindow, v: view::View) {
 }
 
 /// Updates the model in place, so focus and scroll survive the refresh.
-fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, fresh: Vec<T>) {
+fn sync(model: &VecModel<DeviceRow>, fresh: Vec<DeviceRow>) {
     if model.row_count() != fresh.len() {
         model.set_vec(fresh);
         return;
     }
     for (i, item) in fresh.into_iter().enumerate() {
-        if model.row_data(i).as_ref() != Some(&item) {
+        if !model.row_data(i).is_some_and(|old| same_row(&old, &item)) {
             model.set_row_data(i, item);
         }
     }
+}
+
+/// Whether two rows show the same. Slint compares its list models by identity,
+/// and each refresh builds new ones, so the zone lists are compared by content:
+/// a row that didn't change is left alone, and an open picker keeps its zone.
+fn same_row(a: &DeviceRow, b: &DeviceRow) -> bool {
+    fn items<T: Clone + 'static>(m: &ModelRc<T>) -> Vec<T> {
+        m.iter().collect()
+    }
+    let strip =
+        |r: &DeviceRow| DeviceRow { zone_choices: ModelRc::default(), zone_list: ModelRc::default(), ..r.clone() };
+    strip(a) == strip(b)
+        && items(&a.zone_choices) == items(&b.zone_choices)
+        && items(&a.zone_list) == items(&b.zone_list)
 }
 
 /// Forces full repaints for a moment after the window is restored from

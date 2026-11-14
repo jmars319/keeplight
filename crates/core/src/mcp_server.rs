@@ -24,7 +24,7 @@ work; Keeplight keeps a setup per device and puts it back at sign-in, after slee
 changed or notKept), what it was kept as, and what probably lights it.
 - A change is one action on one device: keep (what it shows now), keepDark (only when every light is off), putBack, \
 stopKeeping (a Direct device is handed back to its own Onboard lighting), keepAsBefore (goes back to the setup \
-before the last stopKeeping or setColor; on a kept device the two swap) or setColor with a color as #rrggbb (keeps \
+before the last stopKeeping or setColor; on a kept device the two swap) or setColor with a color as #rrggbb, and optionally a zone id from get_devices to color only that zone (keeps \
 the device's effect in the new color, or switches to Static or Direct; the color is kept). For a whole-PC color, \
 plan one setColor per device.
 - What get_devices reads comes from OpenRGB's record. After sleep, RAM can show its own rainbow while the record \

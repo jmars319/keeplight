@@ -205,6 +205,25 @@ pub fn device_id(display_name: &str) -> String {
     display_name.to_lowercase().split_whitespace().collect::<Vec<_>>().join("-")
 }
 
+/// The color most of `colors` show, leaving black (off) out. Ties go to the
+/// first color seen, so the answer is stable.
+fn most_common(colors: &[Rgb]) -> Option<Rgb> {
+    let mut counts: Vec<(Rgb, usize)> = Vec::new();
+    for c in colors.iter().filter(|c| !c.is_black()) {
+        match counts.iter_mut().find(|(k, _)| k == c) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((*c, 1)),
+        }
+    }
+    counts
+        .into_iter()
+        .fold(None, |best: Option<(Rgb, usize)>, (c, n)| match best {
+            Some((_, bn)) if bn >= n => best,
+            _ => Some((c, n)),
+        })
+        .map(|(c, _)| c)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Zone {
     pub name: String,
@@ -265,6 +284,34 @@ impl Device {
         }
     }
 
+    /// Which of the device's lights belong to zone `zone`: OpenRGB lists the
+    /// lights zone by zone, in zone order. `None` when there is no such zone
+    /// or the zones don't add up to the device's lights.
+    pub fn zone_range(&self, zone: usize) -> Option<std::ops::Range<usize>> {
+        let counts: Vec<usize> = self.zones.iter().map(|z| z.led_count as usize).collect();
+        if counts.iter().sum::<usize>() != self.led_count() || zone >= counts.len() {
+            return None;
+        }
+        let start: usize = counts[..zone].iter().sum();
+        Some(start..start + counts[zone])
+    }
+
+    /// The zone named `wanted` (its name, or its id such as "front-logo"),
+    /// ignoring case.
+    pub fn zone_index(&self, wanted: &str) -> Option<usize> {
+        let wanted = wanted.trim();
+        self.zones.iter().position(|z| z.name.eq_ignore_ascii_case(wanted) || device_id(&z.name) == device_id(wanted))
+    }
+
+    /// The color most of zone `zone`'s lit lights show, like [`Device::lit_color`].
+    pub fn zone_color(&self, zone: usize) -> Option<Rgb> {
+        let range = self.zone_range(zone)?;
+        if self.active().is_some_and(|m| m.color_mode != color_mode::PER_LED) {
+            return self.lit_color();
+        }
+        most_common(&self.colors[range])
+    }
+
     /// The name of the mode when the device is running a lighting mode of its
     /// own, such as "Onboard" or a rainbow, which colors the lights itself.
     /// OpenRGB's per-light colors are then stale or blank, so they say nothing
@@ -290,21 +337,7 @@ impl Device {
             Some(m) if m.color_mode == color_mode::MODE_SPECIFIC => &m.colors,
             _ => &self.colors,
         };
-        let mut counts: Vec<(Rgb, usize)> = Vec::new();
-        for c in shown.iter().filter(|c| !c.is_black()) {
-            match counts.iter_mut().find(|(k, _)| k == c) {
-                Some((_, n)) => *n += 1,
-                None => counts.push((*c, 1)),
-            }
-        }
-        // Ties go to the first color seen, so the answer is stable.
-        counts
-            .into_iter()
-            .fold(None, |best: Option<(Rgb, usize)>, (c, n)| match best {
-                Some((_, bn)) if bn >= n => best,
-                _ => Some((c, n)),
-            })
-            .map(|(c, _)| c)
+        most_common(shown)
     }
 
     /// Decodes a `REQUEST_CONTROLLER_DATA` payload sent at `protocol`

@@ -62,6 +62,10 @@ pub enum KeepError {
     Black,
     #[error("OpenRGB doesn't say which mode it's in now, so Keep it as before couldn't bring it back afterwards.")]
     NoUndo,
+    #[error("it has no such zone, or OpenRGB's zones don't add up to its lights.")]
+    NoZone,
+    #[error("none of its modes colors each light, so one zone can't have a color of its own.")]
+    NoZoneColor,
 }
 
 /// What a new color on `device` replaces, for "Keep it as before": what is
@@ -184,6 +188,38 @@ impl Kept {
             mode,
             colors,
         })
+    }
+
+    /// `device` with only zone `zone` in `color`, the other zones as they are
+    /// kept (or as they show, when it isn't kept). Only a mode that colors
+    /// each light can do that: the device's own when it is one, else what is
+    /// kept for it, else Direct.
+    pub fn colored_zone(device: &Device, kept: Option<&Kept>, zone: usize, color: Rgb) -> Result<Kept, KeepError> {
+        if color.is_black() {
+            return Err(KeepError::Black);
+        }
+        let range = device.zone_range(zone).ok_or(KeepError::NoZone)?;
+        let per_light = |m: &Mode| !m.name.eq_ignore_ascii_case("off") && m.color_mode == color_mode::PER_LED;
+        let kept_mode = kept.map(|k| &k.mode).filter(|m| per_light(m) && device.mode_index(&m.name).is_some());
+        let mode = device
+            .active()
+            .filter(|m| per_light(m))
+            .or(kept_mode)
+            .or_else(|| device.modes.iter().find(|m| m.name.eq_ignore_ascii_case("direct") && per_light(m)))
+            .ok_or(KeepError::NoZoneColor)?
+            .clone();
+        let n = device.led_count();
+        // The other zones: what the keeper puts back, then what OpenRGB shows.
+        let mut colors = match (kept, device.active()) {
+            (Some(k), _) if k.colors.len() == n => k.colors.clone(),
+            (Some(k), _) if k.mode.color_mode == color_mode::MODE_SPECIFIC && !k.mode.colors.is_empty() => {
+                vec![k.mode.colors[0]; n]
+            }
+            (_, Some(m)) if m.color_mode == color_mode::MODE_SPECIFIC && !m.colors.is_empty() => vec![m.colors[0]; n],
+            _ => device.colors.clone(),
+        };
+        colors[range].fill(color);
+        Ok(Kept { name: device.name.clone(), location: device.location.clone(), led_count: n, mode, colors })
     }
 
     pub fn is_for(&self, device: &Device) -> bool {
@@ -519,14 +555,15 @@ pub fn set_color(
     setup_path: &Path,
     name: &str,
     location: &str,
+    zone: Option<usize>,
     color: Rgb,
 ) -> Result<(Kept, Outcome), ActionError> {
     let lock = SetupLock::acquire(setup_path)?;
-    set_color_locked(&lock, address, setup_path, name, location, color)
+    set_color_locked(&lock, address, setup_path, name, location, zone, color)
 }
 
-/// Sets the named device to `color` (see [`Kept::colored`]), keeps that, and
-/// sends it. What was kept before, or what it showed when it wasn't kept, is
+/// Sets the named device, or one of its zones, to `color` (see
+/// [`Kept::colored`] and [`Kept::colored_zone`]), keeps that, and sends it. What was kept before, or what it showed when it wasn't kept, is
 /// remembered for "Keep it as before".
 pub fn set_color_locked(
     _held: &SetupLock,
@@ -534,12 +571,16 @@ pub fn set_color_locked(
     setup_path: &Path,
     name: &str,
     location: &str,
+    zone: Option<usize>,
     color: Rgb,
 ) -> Result<(Kept, Outcome), ActionError> {
     let mut setup = Setup::load(setup_path)?;
     let mut client = Client::connect(address)?;
     let device = find_device(&mut client, name, location)?;
-    let kept = Kept::colored(&device, color)?;
+    let kept = match zone {
+        Some(z) => Kept::colored_zone(&device, setup.find(&device), z, color)?,
+        None => Kept::colored(&device, color)?,
+    };
     let previous = undo_for(&setup, &device)?;
     setup.keep_remembering(kept.clone(), Some(previous));
     setup.save(setup_path)?;
@@ -994,7 +1035,7 @@ mod tests {
         let server = FakeServer::start(vec![testing::ram("SMBus 0x71")]);
         keep_now(&server.address, &path, "ENE DRAM", "SMBus 0x71", Dark::Refuse).unwrap();
 
-        let (kept, outcome) = set_color(&server.address, &path, "ENE DRAM", "SMBus 0x71", BLUE).unwrap();
+        let (kept, outcome) = set_color(&server.address, &path, "ENE DRAM", "SMBus 0x71", None, BLUE).unwrap();
         assert_eq!(outcome, Outcome::Held);
         assert_eq!(kept.mode.name, "Chase Fade");
         assert_eq!(server.device(0).colors, vec![BLUE; 8]);
@@ -1018,11 +1059,73 @@ mod tests {
         let mut kb = testing::keyboard(RED);
         kb.active_mode = Some(1);
         let server = FakeServer::start(vec![kb]);
-        set_color(&server.address, &path, "Apex", "HID: keyboard", BLUE).unwrap();
+        set_color(&server.address, &path, "Apex", "HID: keyboard", None, BLUE).unwrap();
         assert_eq!(server.device(0).active_mode_name(), Some("Direct"));
         assert_eq!(server.device(0).colors, vec![BLUE; 6]);
         let setup = Setup::load(&path).unwrap();
         assert_eq!(setup.before[0].mode.name, "Onboard", "Keep it as before hands it back to its own lighting");
+    }
+
+    /// The test board split into two zones of two lights.
+    fn two_zone_board() -> Device {
+        let mut d = testing::board();
+        d.zones = vec![
+            crate::device::Zone { name: "Board".into(), led_count: 2, matrix: None },
+            crate::device::Zone { name: "Header 1".into(), led_count: 2, matrix: None },
+        ];
+        d
+    }
+
+    #[test]
+    fn a_zone_color_changes_only_that_zone() {
+        // Per-light RAM-like device: keeps its mode, only lights 2 and 3 change.
+        let mut ram = testing::ram("a");
+        ram.zones = vec![
+            crate::device::Zone { name: "Left".into(), led_count: 2, matrix: None },
+            crate::device::Zone { name: "Right".into(), led_count: 6, matrix: None },
+        ];
+        let k = Kept::colored_zone(&ram, None, 0, BLUE).unwrap();
+        assert_eq!(k.mode.name, "Chase Fade");
+        assert_eq!(k.colors[..2], [BLUE; 2]);
+        assert_eq!(k.colors[2..], [RED; 6]);
+        // Static has one color for the whole board: Direct, the rest in that color.
+        let k = Kept::colored_zone(&two_zone_board(), None, 1, BLUE).unwrap();
+        assert_eq!(k.mode.name, "Direct");
+        assert_eq!(k.colors, vec![RED, RED, BLUE, BLUE]);
+    }
+
+    #[test]
+    fn a_zone_color_keeps_the_other_zones_as_kept() {
+        let board = two_zone_board();
+        let first = Kept::colored_zone(&board, None, 0, BLUE).unwrap();
+        // OpenRGB still shows the old Static red; the kept blue zone stays.
+        let green = Rgb { r: 0, g: 255, b: 0 };
+        let both = Kept::colored_zone(&board, Some(&first), 1, green).unwrap();
+        assert_eq!(both.colors, vec![BLUE, BLUE, green, green]);
+    }
+
+    #[test]
+    fn a_zone_color_needs_zones_that_add_up_and_a_per_light_mode() {
+        let mut odd = two_zone_board();
+        odd.zones[1].led_count = 5;
+        assert_eq!(Kept::colored_zone(&odd, None, 1, BLUE), Err(KeepError::NoZone));
+        assert_eq!(Kept::colored_zone(&two_zone_board(), None, 2, BLUE), Err(KeepError::NoZone));
+        let mut static_only = two_zone_board();
+        static_only.modes.retain(|m| m.name == "Static");
+        static_only.active_mode = Some(0);
+        assert_eq!(Kept::colored_zone(&static_only, None, 0, BLUE), Err(KeepError::NoZoneColor));
+    }
+
+    #[test]
+    fn setting_a_zone_color_sends_and_keeps_it() {
+        let path = temp_path("zone-color");
+        let server = FakeServer::start(vec![two_zone_board()]);
+        let (kept, outcome) = set_color(&server.address, &path, "ASUS board", "HID: board", Some(1), BLUE).unwrap();
+        assert_eq!(outcome, Outcome::Held);
+        assert_eq!(server.device(0).active_mode_name(), Some("Direct"));
+        assert_eq!(server.device(0).colors, vec![RED, RED, BLUE, BLUE]);
+        assert_eq!(Setup::load(&path).unwrap().devices[0], kept);
+        assert_eq!(Setup::load(&path).unwrap().before[0].mode.name, "Static", "undo goes back to Static");
     }
 
     #[test]
@@ -1036,7 +1139,7 @@ mod tests {
         let server = FakeServer::start(vec![unknown]);
         let sent_before = server.seen_ids().iter().filter(|&&id| id == packet::UPDATE_MODE).count();
         assert!(matches!(
-            set_color(&server.address, &path, "ENE DRAM", "SMBus 0x71", BLUE),
+            set_color(&server.address, &path, "ENE DRAM", "SMBus 0x71", None, BLUE),
             Err(ActionError::Keep(KeepError::NoUndo))
         ));
         assert_eq!(server.seen_ids().iter().filter(|&&id| id == packet::UPDATE_MODE).count(), sent_before);

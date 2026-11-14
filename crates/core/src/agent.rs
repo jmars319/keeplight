@@ -78,6 +78,13 @@ pub mod codes {
         false,
         Exit::Refused,
     );
+    pub const ZONE_NOT_FOUND: ErrorCode = ErrorCode::new(
+        "zone.not_found",
+        "The device has no zone with that name or id.",
+        "Read the device's zones (get_devices, or keeplight-cli devices --json) and use a zone id from there.",
+        false,
+        Exit::Refused,
+    );
     pub const OPENRGB_UNREACHABLE: ErrorCode = ErrorCode::new(
         "openrgb.unreachable",
         "OpenRGB isn't answering on its SDK port, so Keeplight can't see or set any light.",
@@ -95,6 +102,7 @@ pub static ALL_CODES: std::sync::LazyLock<Vec<ErrorCode>> = std::sync::LazyLock:
         codes::NOTHING_BEFORE,
         codes::CANT_KEEP,
         codes::CANT_COLOR,
+        codes::ZONE_NOT_FOUND,
         codes::OPENRGB_UNREACHABLE,
     ])
 });
@@ -165,15 +173,25 @@ pub struct Change {
     /// For setColor only: the color as #rrggbb, such as "#0050ff".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// For setColor only: one zone of the device, by its name or id as
+    /// get_devices lists its zones ("addressable-rgb-header-1"). The other
+    /// zones keep their colors. Without it, the whole device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
 }
 
 impl Change {
     pub fn new(action: Action, device: impl Into<String>) -> Change {
-        Change { action, device: device.into(), color: None }
+        Change { action, device: device.into(), color: None, zone: None }
     }
 
     pub fn set_color(device: impl Into<String>, color: impl Into<String>) -> Change {
-        Change { action: Action::SetColor, device: device.into(), color: Some(color.into()) }
+        Change { action: Action::SetColor, device: device.into(), color: Some(color.into()), zone: None }
+    }
+
+    /// [`Change::set_color`] for one zone of the device.
+    pub fn in_zone(self, zone: impl Into<String>) -> Change {
+        Change { zone: Some(zone.into()), ..self }
     }
 }
 
@@ -248,6 +266,21 @@ pub struct DeviceReport {
     /// What probably lights it now, in plain words. A guess where it says
     /// "probably".
     pub lit_by: String,
+    /// Its zones, in order. setColor can color one on its own.
+    pub zones: Vec<ZoneReport>,
+}
+
+/// One zone of a device.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoneReport {
+    /// Use this, or the name, as setColor's zone.
+    pub id: String,
+    pub name: String,
+    pub lights: usize,
+    /// The color most of its lights show, as #rrggbb; none when they are all
+    /// off or the device runs a mode of its own.
+    pub color: Option<String>,
 }
 
 /// The `get_devices` result.
@@ -338,14 +371,36 @@ pub fn from_action(e: ActionError) -> AgentError {
     match e {
         ActionError::Sdk(e) => from_sdk(e),
         ActionError::Setup(e) => from_setup(e),
-        ActionError::Keep(e @ (KeepError::NoColorMode | KeepError::Black | KeepError::NoUndo)) => {
-            AgentError::new(codes::CANT_COLOR, format!("Keeplight can't set that color: {e}"))
-        }
+        ActionError::Keep(
+            e @ (KeepError::NoColorMode
+            | KeepError::Black
+            | KeepError::NoUndo
+            | KeepError::NoZone
+            | KeepError::NoZoneColor),
+        ) => AgentError::new(codes::CANT_COLOR, format!("Keeplight can't set that color: {e}")),
         ActionError::Keep(e) => AgentError::new(codes::CANT_KEEP, format!("Keeplight can't keep it: {e}")),
         ActionError::NotFound => AgentError::new(codes::DEVICE_NOT_FOUND, ActionError::NotFound.to_string()),
         ActionError::NotKept => AgentError::new(codes::DEVICE_NOT_KEPT, ActionError::NotKept.to_string()),
         ActionError::NothingBefore => AgentError::new(codes::NOTHING_BEFORE, ActionError::NothingBefore.to_string()),
         ActionError::NoLongerDark => AgentError::new(kit::CHANGED_MEANWHILE, ActionError::NoLongerDark.to_string()),
+    }
+}
+
+/// A setColor change's zone, as an index into the device's zones.
+fn zone_of(change: &Change, device: &Device, name: &str) -> Result<Option<usize>> {
+    let Some(wanted) = change.zone.as_deref().map(str::trim).filter(|z| !z.is_empty()) else { return Ok(None) };
+    match device.zone_index(wanted) {
+        Some(z) => Ok(Some(z)),
+        None => {
+            let zones: Vec<String> = device.zones.iter().map(|z| device_id(&z.name)).collect();
+            Err(AgentError::new(
+                codes::ZONE_NOT_FOUND,
+                format!(
+                    "{name} has no zone \u{201c}{wanted}\u{201d}. Its zones: {}. Nothing was changed.",
+                    zones.join(", ")
+                ),
+            ))
+        }
     }
 }
 
@@ -436,13 +491,27 @@ pub fn check(change: &Change, devices: &[Device], setup: &Setup) -> Result<Check
                     format!("{name} can't be set to {}: {e} Nothing was changed.", color.hex()),
                 )
             };
-            let k = Kept::colored(device, color).map_err(cant)?;
+            let zone = zone_of(change, device, &name)?;
+            let k = match zone {
+                Some(z) => Kept::colored_zone(device, kept, z, color),
+                None => Kept::colored(device, color),
+            }
+            .map_err(cant)?;
             keep::undo_for(setup, device).map_err(cant)?;
             let was = match kept {
                 Some(old) => describe(old),
                 None => format!("what it shows now ({})", device.active_mode_name().unwrap_or("its current mode")),
             };
-            vec![format!("Set {name} to {} and keep it. Keep it as before goes back to {was}.", describe(&k))]
+            let what = match zone {
+                Some(z) => format!(
+                    "{name}'s {} to {} ({}), the rest as it is,",
+                    device.zones[z].name,
+                    color.hex(),
+                    k.mode.name
+                ),
+                None => format!("{name} to {}", describe(&k)),
+            };
+            vec![format!("Set {what} and keep it. Keep it as before goes back to {was}.")]
         }
     };
     Ok(Checked { device: device.clone(), name, steps })
@@ -561,6 +630,17 @@ impl Engine {
                     kept_as: kept.map(describe),
                     kept_before: setup.find_before(d).map(describe),
                     lit_by: lit_by(d, kept.is_some(), &running).describe(),
+                    zones: d
+                        .zones
+                        .iter()
+                        .enumerate()
+                        .map(|(i, z)| ZoneReport {
+                            id: device_id(&z.name),
+                            name: z.name.clone(),
+                            lights: z.led_count as usize,
+                            color: d.zone_color(i).map(|c| c.hex()),
+                        })
+                        .collect(),
                 }
             })
             .collect();
@@ -718,20 +798,20 @@ impl Engine {
             }
             Action::SetColor => {
                 let color = parse_color(change.color.as_deref())?;
-                let (k, outcome) =
-                    keep::set_color_locked(lock, address, &setup, &d.name, &d.location, color).map_err(from_action)?;
+                let zone = zone_of(change, d, name)?;
+                let (k, outcome) = keep::set_color_locked(lock, address, &setup, &d.name, &d.location, zone, color)
+                    .map_err(from_action)?;
+                let what = match zone {
+                    Some(z) => format!("{name}'s {} in {}", d.zones[z].name, color.hex()),
+                    None => format!("{name} as {}", describe(&k)),
+                };
                 let (words, held) = match &outcome {
-                    Outcome::Held => (format!("Set {name} to {} and kept it.", describe(&k)), Some(true)),
+                    Outcome::Held => (format!("Set and kept {what}."), Some(true)),
                     Outcome::NotHeld => (
-                        format!(
-                            "Keeping {name} as {}, but it reads back as something else after being sent it.",
-                            describe(&k)
-                        ),
+                        format!("Keeping {what}, but it reads back as something else after being sent it."),
                         Some(false),
                     ),
-                    Outcome::Skipped(reason) => {
-                        (format!("Keeping {name} as {}, but didn't send it: {reason}.", describe(&k)), None)
-                    }
+                    Outcome::Skipped(reason) => (format!("Keeping {what}, but didn't send it: {reason}."), None),
                 };
                 (Effect::ColorSet(outcome), words, held)
             }
@@ -939,6 +1019,34 @@ mod tests {
         e.change_now(&Caller::Window, change(Action::KeepAsBefore, "ram-stick")).unwrap();
         assert_eq!(server.device(0).colors[0], RED);
         assert!(e.recent_events(50).iter().any(|ev| ev.event == "device.color_set"));
+    }
+
+    #[test]
+    fn set_color_on_one_zone_is_planned_by_zone_id() {
+        let d = data("zone");
+        let mut board = testing::board();
+        board.zones = vec![
+            crate::device::Zone { name: "Board".into(), led_count: 2, matrix: None },
+            crate::device::Zone { name: "Addressable Header 1".into(), led_count: 2, matrix: None },
+        ];
+        let server = FakeServer::start(vec![board]);
+        let e = engine(&server, &d);
+        let r = e.devices().unwrap();
+        assert_eq!(r.devices[0].zones[1].id, "addressable-header-1");
+        assert_eq!(r.devices[0].zones[1].color.as_deref(), Some("#ff0000"));
+        let change = Change::set_color("motherboard", "#0050ff").in_zone("addressable-header-1");
+        let plan = e.plan(&Caller::Cli, change).unwrap();
+        assert_eq!(
+            plan.payload.steps,
+            ["Set Motherboard's Addressable Header 1 to #0050ff (Direct), the rest as it is, and keep it. Keep it as \
+              before goes back to what it shows now (Static)."]
+        );
+        let applied = e.apply(&Caller::Cli, &plan.plan_id, None).unwrap();
+        assert_eq!(applied.result, "Set and kept Motherboard's Addressable Header 1 in #0050ff.");
+        let blue = crate::device::Rgb { r: 0, g: 0x50, b: 0xff };
+        assert_eq!(server.device(0).colors, vec![RED, RED, blue, blue]);
+        let missing = Change::set_color("motherboard", "#0050ff").in_zone("nope");
+        assert_eq!(e.plan(&Caller::Cli, missing).unwrap_err().code, codes::ZONE_NOT_FOUND);
     }
 
     #[test]

@@ -164,7 +164,8 @@ try {
     # The motherboard's Static mode keeps its color in the mode's own list.
     function KeptBlue { [bool](Kept | Where-Object { $_.mode.colors -and $_.mode.colors[0] -eq '#0050ff' }) }
     Click 'Choose a color for Motherboard'
-    Check 'button: Color… opens the colors' (Eventually { Has 'Set Motherboard to blue' })
+    Check 'button: Color… opens the colors' (Eventually { Has 'Which part of Motherboard to color' })
+    Check 'the colors start on the whole device' (Eventually { Wheel 3; Has 'Set Motherboard to blue' })
     Click 'Set Motherboard to blue'
     Check 'a color dot sets and keeps that color' (Eventually { KeptBlue -and (Kept).Count -eq 3 })
     Check 'the colors close after a pick' (Eventually { -not (Has 'Set Motherboard to blue') })

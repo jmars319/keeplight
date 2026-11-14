@@ -3,8 +3,16 @@ import "../../../assets/fonts/Geist-Regular.ttf";
 import "../../../assets/fonts/Geist-SemiBold.ttf";
 import "../../../assets/fonts/Geist-Bold.ttf";
 import "../../../assets/fonts/GeistMono-Regular.ttf";
-import { LineEdit, Palette, ScrollView } from "std-widgets.slint";
+import { ComboBox, LineEdit, Palette, ScrollView } from "std-widgets.slint";
 import { Button, Switch, Theme } from "theme.slint";
+
+export struct ZoneItem {
+    name: string,
+    // Its name and light count, such as "Board (4)".
+    label: string,
+    lit: bool,
+    swatch: color,
+}
 
 export struct DeviceRow {
     // Product name and location: how the actions find the device again.
@@ -20,6 +28,11 @@ export struct DeviceRow {
     has-before: bool,
     // One of its modes takes a color: the row offers "Color…".
     can-color: bool,
+    // More than one zone: a swatch per zone, and the picker can color one.
+    zone-list: [ZoneItem],
+    // "Whole device", then each zone's name, for the picker's choice.
+    zone-choices: [string],
+    can-color-zones: bool,
     // It runs a lighting mode of its own, so its colors are unknown.
     own-lighting: bool,
     // What probably lights it, after "Lit by: "; warn when another app may
@@ -57,7 +70,7 @@ export global Ui {
     callback stop-keeping(DeviceRow);
     callback keep-as-before(DeviceRow);
     // A color as #rrggbb, set and kept.
-    callback set-color(DeviceRow, string);
+    callback set-color(DeviceRow, string, string);
     // The keeper at sign-in.
     in-out property <bool> sign-in;
     in property <string> sign-in-note;
@@ -136,55 +149,78 @@ component ColorDot inherits Rectangle {
     }
 }
 
-component ColorPicker inherits HorizontalLayout {
+component ColorPicker inherits VerticalLayout {
     in property <DeviceRow> item;
     callback done();
+    // The zone a pick goes to: "" for the whole device.
+    property <int> zone-index: 0;
+    property <string> zone: root.zone-index <= 0 ? "" : root.item.zone-list[root.zone-index - 1].name;
+    property <string> target: root.zone == "" ? root.item.name : root.item.name + " " + root.zone;
     spacing: 8px;
-    alignment: start;
-    for c in [
-        { fill: #ff0000, hex: "#ff0000", name: "red" },
-        { fill: #ff6a00, hex: "#ff6a00", name: "orange" },
-        { fill: #ffd200, hex: "#ffd200", name: "yellow" },
-        { fill: #00ff40, hex: "#00ff40", name: "green" },
-        { fill: #00e5ff, hex: "#00e5ff", name: "cyan" },
-        { fill: #0050ff, hex: "#0050ff", name: "blue" },
-        { fill: #8a2be2, hex: "#8a2be2", name: "purple" },
-        { fill: #ff2d95, hex: "#ff2d95", name: "pink" },
-        { fill: #ffffff, hex: "#ffffff", name: "white" },
-    ]: VerticalLayout {
-        alignment: center;
-        ColorDot {
-            fill: c.fill;
-            label: "Set " + root.item.name + " to " + c.name;
-            picked => {
-                Ui.set-color(root.item, c.hex);
+    if root.item.can-color-zones: HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        Text {
+            text: "Color";
+            font-size: 12px;
+            color: Theme.secondary-text;
+            vertical-alignment: center;
+        }
+        ComboBox {
+            model: root.item.zone-choices;
+            current-index <=> root.zone-index;
+            width: 220px;
+            accessible-label: "Which part of " + root.item.name + " to color";
+        }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        for c in [
+            { fill: #ff0000, hex: "#ff0000", name: "red" },
+            { fill: #ff6a00, hex: "#ff6a00", name: "orange" },
+            { fill: #ffd200, hex: "#ffd200", name: "yellow" },
+            { fill: #00ff40, hex: "#00ff40", name: "green" },
+            { fill: #00e5ff, hex: "#00e5ff", name: "cyan" },
+            { fill: #0050ff, hex: "#0050ff", name: "blue" },
+            { fill: #8a2be2, hex: "#8a2be2", name: "purple" },
+            { fill: #ff2d95, hex: "#ff2d95", name: "pink" },
+            { fill: #ffffff, hex: "#ffffff", name: "white" },
+        ]: VerticalLayout {
+            alignment: center;
+            ColorDot {
+                fill: c.fill;
+                label: "Set " + root.target + " to " + c.name;
+                picked => {
+                    Ui.set-color(root.item, c.hex, root.zone);
+                    root.done();
+                }
+            }
+        }
+        hex := LineEdit {
+            placeholder-text: "#rrggbb";
+            width: 100px;
+            font-size: 12px;
+            accessible-label: "Color for " + root.target + " as #rrggbb";
+            accepted => {
+                Ui.set-color(root.item, self.text, root.zone);
                 root.done();
             }
         }
-    }
-    hex := LineEdit {
-        placeholder-text: "#rrggbb";
-        width: 100px;
-        font-size: 12px;
-        accessible-label: "Color for " + root.item.name + " as #rrggbb";
-        accepted => {
-            Ui.set-color(root.item, self.text);
-            root.done();
+        Button {
+            text: "Set";
+            enabled: !Ui.busy && hex.text != "";
+            accessible-label: "Set " + root.target + " to the color typed";
+            clicked => {
+                Ui.set-color(root.item, hex.text, root.zone);
+                root.done();
+            }
         }
-    }
-    Button {
-        text: "Set";
-        enabled: !Ui.busy && hex.text != "";
-        accessible-label: "Set " + root.item.name + " to the color typed";
-        clicked => {
-            Ui.set-color(root.item, hex.text);
-            root.done();
+        Button {
+            text: "Cancel";
+            accessible-label: "Close the colors for " + root.item.name;
+            clicked => { root.done(); }
         }
-    }
-    Button {
-        text: "Cancel";
-        accessible-label: "Close the colors for " + root.item.name;
-        clicked => { root.done(); }
     }
 }
 
@@ -256,12 +292,30 @@ component DeviceRowView inherits Rectangle {
                     overflow: elide;
                     accessible-role: none;
                 }
-                if root.item.zones != "": Text {
-                    text: root.item.zones;
-                    font-size: 12px;
-                    color: Theme.secondary-text;
-                    wrap: word-wrap;
-                    accessible-role: none;
+                if root.item.zone-list.length > 1: HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+                    for z in root.item.zone-list: HorizontalLayout {
+                        spacing: 5px;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 10px;
+                                height: 10px;
+                                border-radius: 5px;
+                                background: z.lit ? z.swatch : transparent;
+                                border-width: z.lit ? 0px : 1px;
+                                border-color: Theme.secondary-text.transparentize(40%);
+                            }
+                        }
+                        Text {
+                            text: z.label;
+                            font-size: 12px;
+                            color: Theme.secondary-text;
+                            overflow: elide;
+                            accessible-role: none;
+                        }
+                    }
                 }
                 if root.item.note != "": Text {
                     text: root.item.note;

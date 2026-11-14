@@ -107,6 +107,13 @@
         "product": {
           "description": "The product name OpenRGB reports.",
           "type": "string"
+        },
+        "zones": {
+          "description": "Its zones, in order. setColor can color one on its own.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ZoneReport"
+          }
         }
       },
       "required": [
@@ -120,7 +127,8 @@
         "ownLighting",
         "canStoreColor",
         "kept",
-        "litBy"
+        "litBy",
+        "zones"
       ]
     },
     "KeptState": {
@@ -147,6 +155,36 @@
           "type": "string",
           "const": "changed"
         }
+      ]
+    },
+    "ZoneReport": {
+      "description": "One zone of a device.",
+      "type": "object",
+      "properties": {
+        "color": {
+          "description": "The color most of its lights show, as #rrggbb; none when they are all\noff or the device runs a mode of its own.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Use this, or the name, as setColor's zone.",
+          "type": "string"
+        },
+        "lights": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "lights"
       ]
     }
   }
