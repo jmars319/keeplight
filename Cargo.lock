@@ -2385,7 +2385,7 @@ dependencies = [
 
 [[package]]
 name = "keeplight"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "keeplight-core",
  "raw-window-handle",
@@ -2397,7 +2397,7 @@ dependencies = [
 
 [[package]]
 name = "keeplight-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "keeplight-core",
  "serde",
@@ -2406,7 +2406,7 @@ dependencies = [
 
 [[package]]
 name = "keeplight-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rmcp",
  "schemars",
