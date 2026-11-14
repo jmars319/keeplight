@@ -62,6 +62,7 @@ pub fn run() -> i32 {
             if keeplight_core::paths::is_this_pc(&address) {
                 let installs = keeplight_core::installs::read();
                 (v.installs, v.installs_warn) = (installs.summary(), installs.needs_attention());
+                v.offer = installs.next_offer().map(view::offer);
             }
             if weak.upgrade_in_event_loop(move |ui| apply(&ui, v)).is_err() {
                 return;
@@ -93,6 +94,14 @@ pub fn run() -> i32 {
         let weak = ui.as_weak();
         let tx2 = tx.clone();
         let weak2 = ui.as_weak();
+        let tx3 = tx.clone();
+        let weak3 = ui.as_weak();
+        g.on_install(move |key| {
+            if let Some(ui) = weak3.upgrade() {
+                ui.global::<Ui>().set_busy(true);
+            }
+            let _ = tx3.send(Command::Install(key.to_string()));
+        });
         g.on_set_everything(move |color| {
             if let Some(ui) = weak2.upgrade() {
                 ui.global::<Ui>().set_busy(true);
@@ -169,6 +178,9 @@ enum Command {
     SetColor(Target, String, String),
     /// One color for every device that can take it.
     SetEverything(String),
+    /// Download, check and run the tested installer for a product
+    /// ("openrgb" or "pawnio"), after the window asked.
+    Install(String),
     /// Turn the keeper at sign-in on or off.
     SignIn(bool),
     /// Show or hide the keeper's icon in the notification area.
@@ -252,6 +264,24 @@ fn color_change(engine: &Engine, change: Change, row: &Target) -> view::Notice {
     }
 }
 
+/// Installs the tested OpenRGB or PawnIO the window offered, if it is
+/// still what Keeplight would offer now.
+fn install(key: &str) -> view::Notice {
+    use keeplight_core::installer::{self, Finished};
+    let note = |text: String, warn: bool| view::Notice { text, warn };
+    let Some(pinned) = keeplight_core::installs::read().next_offer().filter(|p| p.product.key() == key) else {
+        return note("Nothing to install: it's already a tested version.".into(), false);
+    };
+    let what = format!("{} {}", pinned.product.name(), pinned.version);
+    match installer::install(pinned, &keeplight_core::paths::Paths::from_env().downloads()) {
+        Ok(Finished::Done) => note(format!("Installed {what}."), false),
+        Ok(Finished::RestartNeeded) => note(format!("Installed {what}. Restart Windows to finish."), true),
+        Ok(Finished::Cancelled) => note(format!("The {what} installer was cancelled, so nothing changed."), true),
+        Ok(Finished::Failed(code)) => note(format!("The {what} installer ended with code {code}."), true),
+        Err(e) => note(format!("Couldn't install {what}. {e}"), true),
+    }
+}
+
 fn run_command(command: &Command, engine: &Engine) -> view::Notice {
     let note = |text: String, warn: bool| view::Notice { text, warn };
     match command {
@@ -260,6 +290,7 @@ fn run_command(command: &Command, engine: &Engine) -> view::Notice {
         Command::PutBack(row) => device_change(engine, Action::PutBack, row),
         Command::StopKeeping(row) => device_change(engine, Action::StopKeeping, row),
         Command::KeepAsBefore(row) => device_change(engine, Action::KeepAsBefore, row),
+        Command::Install(key) => install(key),
         Command::SetEverything(color) => match engine.set_everything(&Caller::Window, color) {
             Ok(r) => {
                 let mut text = format!("Set {} of {} devices to {} and kept them.", r.set(), r.devices.len(), r.color);
@@ -347,6 +378,10 @@ fn apply(ui: &AppWindow, v: view::View) {
     g.set_summary(v.summary.into());
     g.set_installs(v.installs.into());
     g.set_installs_warn(v.installs_warn);
+    let (offer_key, offer_label, offer_text) = v.offer.unwrap_or_default();
+    g.set_offer_key(offer_key.into());
+    g.set_offer_label(offer_label.into());
+    g.set_offer_text(offer_text.into());
     g.set_can_set_everything(v.rows.iter().any(|r| r.can_color));
     let fresh: Vec<DeviceRow> = v
         .rows

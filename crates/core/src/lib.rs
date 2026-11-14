@@ -13,6 +13,7 @@
 pub mod agent_kit;
 pub mod agent;
 pub mod device;
+pub mod installer;
 pub mod installs;
 pub mod keep;
 pub mod keeper;

@@ -40,6 +40,11 @@ impl Paths {
     }
 
     /// The event log, a file per day (agent-interface kit).
+    /// Pinned installers Keeplight downloaded (stage 05).
+    pub fn downloads(&self) -> PathBuf {
+        self.data.join("downloads")
+    }
+
     pub fn logs(&self) -> PathBuf {
         self.data.join("logs")
     }

@@ -20,6 +20,14 @@ pub enum Product {
 }
 
 impl Product {
+    /// Its key in the window and the JSON: "openrgb" or "pawnio".
+    pub fn key(self) -> &'static str {
+        match self {
+            Product::OpenRgb => "openrgb",
+            Product::PawnIo => "pawnio",
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Product::OpenRgb => "OpenRGB",
@@ -33,11 +41,56 @@ impl Product {
     }
 }
 
+/// How a pinned installer runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    /// A Windows Installer package, run by `msiexec /i`.
+    Msi,
+    /// A setup program, run as it is.
+    Exe,
+}
+
+/// A version Keeplight is tested with, and the official installer for it,
+/// pinned by size and SHA-256. Keeplight installs nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pinned {
+    pub product: Product,
+    pub version: &'static str,
+    /// Where the project itself publishes it. Always https.
+    pub url: &'static str,
+    /// The file name it is saved as.
+    pub file: &'static str,
+    pub size: u64,
+    pub sha256: &'static str,
+    pub kind: Kind,
+}
+
 /// The versions Keeplight is tested with, newest first per product.
-pub const TESTED: &[(Product, &str)] = &[
+/// Hashes taken 2026-11-14 from the official downloads (owner's OK); the
+/// OpenRGB package is the one installed on JASON-PC (same product code),
+/// and PawnIO's matches the SHA-256 GitHub publishes for the release.
+pub const TESTED: &[Pinned] = &[
     // On JASON-PC since September 2026; every stage so far ran against it.
-    (Product::OpenRgb, "1.0.0"),
-    (Product::PawnIo, "2.2.0"),
+    Pinned {
+        product: Product::OpenRgb,
+        version: "1.0.0",
+        url: "https://codeberg.org/OpenRGB/OpenRGB/releases/download/release_1.0/OpenRGB_1.0_Windows_64_81bbe18.msi",
+        file: "OpenRGB_1.0_Windows_64_81bbe18.msi",
+        size: 23_336_448,
+        sha256: "27cd65546ea321eb61403825af494bb5caf2a212bafdbd55de7a061b0c3ef553",
+        kind: Kind::Msi,
+    },
+    Pinned {
+        product: Product::PawnIo,
+        version: "2.2.0",
+        url: "https://github.com/namazso/PawnIO.Setup/releases/download/2.2.0/PawnIO_setup.exe",
+        file: "PawnIO_setup-2.2.0.exe",
+        size: 3_410_960,
+        sha256: "1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032",
+        kind: Kind::Exe,
+    },
 ];
 
 /// How an installed version stands against the tested ones.
@@ -131,7 +184,7 @@ pub fn compare(a: &str, b: &str) -> std::cmp::Ordering {
 
 /// How `installed` stands against the tested versions of `product`.
 pub fn assess(product: Product, installed: Option<&str>) -> Component {
-    let tested: Vec<&str> = TESTED.iter().filter(|(p, _)| *p == product).map(|(_, v)| *v).collect();
+    let tested: Vec<&str> = TESTED.iter().filter(|t| t.product == product).map(|t| t.version).collect();
     let newest = tested.iter().copied().max_by(|a, b| compare(a, b)).unwrap_or("none");
     let standing = match installed {
         None => Standing::NotInstalled,
@@ -140,6 +193,35 @@ pub fn assess(product: Product, installed: Option<&str>) -> Component {
         Some(v) => Standing::NotTested(v.to_string()),
     };
     Component { product, standing, tested: newest.to_string() }
+}
+
+/// The installer Keeplight offers for `c`: the newest tested version, when
+/// the product is missing or older. Never a downgrade, and nothing for an
+/// untested newer version.
+pub fn offer(c: &Component) -> Option<&'static Pinned> {
+    if !matches!(c.standing, Standing::NotInstalled | Standing::Older(_)) {
+        return None;
+    }
+    TESTED.iter().filter(|t| t.product == c.product).max_by(|a, b| compare(a.version, b.version))
+}
+
+impl Pinned {
+    /// The host it downloads from, such as "codeberg.org".
+    pub fn host(&self) -> &'static str {
+        self.url.trim_start_matches("https://").split('/').next().unwrap_or(self.url)
+    }
+
+    /// Its size in whole megabytes, rounded up.
+    pub fn megabytes(&self) -> u64 {
+        self.size.div_ceil(1_000_000)
+    }
+}
+
+impl Installs {
+    /// What Keeplight would install first: OpenRGB, then PawnIO.
+    pub fn next_offer(&self) -> Option<&'static Pinned> {
+        offer(&self.openrgb).or_else(|| offer(&self.pawnio))
+    }
 }
 
 /// What this PC has, read from Windows.
@@ -289,6 +371,25 @@ mod tests {
         assert_eq!(assess(Product::OpenRgb, Some("0.9")).standing, Standing::Older("0.9".into()));
         assert_eq!(assess(Product::OpenRgb, None).standing, Standing::NotInstalled);
         assert_eq!(assess(Product::OpenRgb, None).tested, "1.0.0");
+    }
+
+    #[test]
+    fn only_missing_or_older_products_are_offered_a_tested_installer() {
+        let missing = offer(&assess(Product::OpenRgb, None)).unwrap();
+        assert_eq!((missing.version, missing.kind), ("1.0.0", Kind::Msi));
+        assert_eq!(offer(&assess(Product::PawnIo, Some("2.1.0"))).unwrap().version, "2.2.0");
+        assert!(offer(&assess(Product::OpenRgb, Some("1.0.0"))).is_none());
+        assert!(offer(&assess(Product::OpenRgb, Some("1.1"))).is_none(), "never a downgrade");
+    }
+
+    #[test]
+    fn pinned_installers_are_https_with_a_full_sha256() {
+        for t in TESTED {
+            assert!(t.url.starts_with("https://"), "{}", t.url);
+            assert_eq!(t.sha256.len(), 64);
+            assert!(t.sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+            assert!(t.size > 0 && !t.file.contains(['/', '\\']));
+        }
     }
 
     #[test]
