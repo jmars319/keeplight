@@ -105,6 +105,11 @@ try {
             $e = All | Where-Object { $_.Current.Name -eq $name } | Select-Object -First 1
             if ($e) {
                 $r = $e.Current.BoundingRectangle
+                # Partly below the window: Slint still lists it, but a click
+                # there misses. Scroll it up into view.
+                $wr = New-Object SmokeClicks+RECT
+                [SmokeClicks]::GetWindowRect($h, [ref]$wr) | Out-Null
+                if ($r.Width -gt 0 -and $r.Y + $r.Height -gt $wr.B - 60) { Wheel 2; $b = $null; Start-Sleep -Milliseconds 300; continue }
                 if ($b -and $r -eq $b -and $r.Width -gt 0) { break }
                 $b = $r
             } elseif ($k -ge 3) {
@@ -156,6 +161,17 @@ try {
     Check 'a kept device always offers Put back' (Eventually { Has 'Put back Motherboard' })
     Click 'Stop keeping Motherboard'
     Check 'button: Stop keeping again removes it' (Eventually { (Kept).Count -eq 2 })
+    # The motherboard's Static mode keeps its color in the mode's own list.
+    function KeptBlue { [bool](Kept | Where-Object { $_.mode.colors -and $_.mode.colors[0] -eq '#0050ff' }) }
+    Click 'Choose a color for Motherboard'
+    Check 'button: Color… opens the colors' (Eventually { Has 'Set Motherboard to blue' })
+    Click 'Set Motherboard to blue'
+    Check 'a color dot sets and keeps that color' (Eventually { KeptBlue -and (Kept).Count -eq 3 })
+    Check 'the colors close after a pick' (Eventually { -not (Has 'Set Motherboard to blue') })
+    Click 'Keep Motherboard as before'
+    Check 'Keep it as before undoes the color' (Eventually { -not (KeptBlue) -and (Kept).Count -eq 3 })
+    Click 'Stop keeping Motherboard'
+    Check 'button: Stop keeping after a color removes it' (Eventually { (Kept).Count -eq 2 })
     Click 'Put kept lights back when you sign in'
     Check 'switch: on registers this exe with --keep' (Eventually { (Entry $entry) -like '*keeplight.exe" --keep' })
     # The keeper it starts inherits the fake server and the throwaway folder.

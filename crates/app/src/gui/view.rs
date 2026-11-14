@@ -1,7 +1,7 @@
 //! Turns what OpenRGB reported, and what you chose to keep, into the words
 //! the window shows. Plain Rust, so it is tested without a window.
 
-use keeplight_core::device::Device;
+use keeplight_core::device::{Device, Rgb};
 use keeplight_core::keep::{Fit, KeepError, Kept, Setup, is_dark};
 use keeplight_core::sdk::Snapshot;
 
@@ -112,6 +112,8 @@ pub struct Row {
     pub dark: bool,
     /// It was kept before, so "Keep it as before" can bring that back.
     pub has_before: bool,
+    /// One of its modes takes a color, so the color picker can set it.
+    pub can_color: bool,
     /// It runs a lighting mode of its own, so its colors are unknown.
     pub own_lighting: bool,
     /// What probably lights it, after "Lit by: ".
@@ -217,8 +219,8 @@ fn rows(devices: &[Device], setup: Option<&Setup>, running: &[String]) -> Vec<Ro
                 "Can't save a color to itself, so it resets whenever it loses power.".to_string()
             };
             let (status, status_text) = status(d, setup.and_then(|s| s.find(d)));
-            // What it was kept as before you stopped keeping it, if anything.
-            let before = if status == Status::NotKept { setup.and_then(|s| s.find_before(d)) } else { None };
+            // What it was kept as before the last stop keeping or new color.
+            let before = setup.and_then(|s| s.find_before(d));
             let lit = keeplight_core::lit_by::lit_by(d, setup.is_some_and(|s| s.find(d).is_some()), running);
             let capture = Kept::capture(d);
             let dark = is_dark(d);
@@ -242,6 +244,9 @@ fn rows(devices: &[Device], setup: Option<&Setup>, running: &[String]) -> Vec<Ro
                 _ => status_text,
             };
             let status_text = match before {
+                Some(k) if status != Status::NotKept => {
+                    format!("{status_text} Before: {}.", describe(k)).trim_start().to_string()
+                }
                 Some(k) if status_text.is_empty() => format!("Kept before as {}.", describe(k)),
                 Some(k) => format!("{status_text} Kept before as {}.", describe(k)),
                 None => status_text,
@@ -263,6 +268,8 @@ fn rows(devices: &[Device], setup: Option<&Setup>, running: &[String]) -> Vec<Ro
                 can_keep,
                 dark,
                 has_before: before.is_some(),
+                can_color: setup.is_some_and(|s| keeplight_core::keep::undo_for(s, d).is_ok())
+                    && Kept::colored(d, Rgb { r: 255, g: 255, b: 255 }).is_ok(),
             }
         })
         .collect()

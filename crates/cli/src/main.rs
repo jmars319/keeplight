@@ -15,12 +15,13 @@ keeplight-cli devices                    every device, and how it stands against
 keeplight-cli plan <action> <device>     check a change and save it as a plan; changes nothing else
 keeplight-cli apply <plan id> --yes      apply a saved plan once
 keeplight-cli <action> <device> --yes    plan and apply a change at once
+keeplight-cli set-color <device> <color> --yes   set a device to #rrggbb and keep it (also with plan)
 keeplight-cli logs [--limit N]           the newest events
 keeplight-cli diagnose                   everything for working out a problem, redacted (JSON)
 keeplight-cli error-codes                every error code
 keeplight-cli mcp                        an MCP server on stdin and stdout (docs/ai.md)
 
-<action> is keep, keep-dark, put-back, stop-keeping or keep-as-before.
+<action> is keep, keep-dark, put-back, stop-keeping, keep-as-before or set-color.
 <device> is an id or name from `devices`, such as ram-stick-1.
 --json prints one JSON object (the result, or an error report) instead of text.
 Exit codes: 0 ok, 2 bad usage, 3 refused, 4 changed meanwhile, 5 busy, 6 failed, 10 unexpected.";
@@ -51,11 +52,15 @@ fn usage(message: impl Into<String>) -> AgentError {
     AgentError::new(codes::USAGE, format!("{} Run `keeplight-cli help` for the commands.", message.into()))
 }
 
-fn change(action: &str, device: Option<&String>) -> Result<Change, AgentError> {
+fn change(action: &str, device: Option<&String>, color: Option<&String>) -> Result<Change, AgentError> {
     let action =
         Action::from_word(action).ok_or_else(|| usage(format!("There is no action \u{201c}{action}\u{201d}.")))?;
     let device = device.ok_or_else(|| usage(format!("Name a device for {}.", action.word())))?;
-    Ok(Change { action, device: device.clone() })
+    if action == Action::SetColor {
+        let color = color.ok_or_else(|| usage("Name a color for set-color, such as #0050ff."))?;
+        return Ok(Change::set_color(device.clone(), color.clone()));
+    }
+    Ok(Change::new(action, device.clone()))
 }
 
 fn parse(raw: &[String]) -> Result<Args, AgentError> {
@@ -86,13 +91,13 @@ fn parse(raw: &[String]) -> Result<Args, AgentError> {
         "devices" => Command::Devices,
         "plan" => {
             let action = words.get(1).ok_or_else(|| usage("Name an action to plan."))?;
-            Command::Plan(change(action, words.get(2))?)
+            Command::Plan(change(action, words.get(2), words.get(3))?)
         }
         "apply" => Command::Apply(words.get(1).cloned().ok_or_else(|| usage("Name the plan id to apply."))?),
         "logs" => Command::Logs(limit.min(500)),
         "diagnose" => Command::Diagnose,
         "error-codes" => Command::ErrorCodes,
-        action => Command::Change(change(action, words.get(1))?),
+        action => Command::Change(change(action, words.get(1), words.get(2))?),
     };
     let changes = matches!(command, Command::Apply(_) | Command::Change(_));
     if changes && !yes {
@@ -242,12 +247,20 @@ mod tests {
         assert_eq!(args("devices --json").unwrap(), Args { command: Command::Devices, json: true, yes: false });
         assert_eq!(
             args("plan put-back ram-stick-1").unwrap().command,
-            Command::Plan(Change { action: Action::PutBack, device: "ram-stick-1".into() })
+            Command::Plan(Change::new(Action::PutBack, "ram-stick-1"))
         );
         assert_eq!(args("apply 0123456789abcdef --yes").unwrap().command, Command::Apply("0123456789abcdef".into()));
         assert_eq!(
             args("stop-keeping keyboard --yes --json").unwrap().command,
-            Command::Change(Change { action: Action::StopKeeping, device: "keyboard".into() })
+            Command::Change(Change::new(Action::StopKeeping, "keyboard"))
+        );
+        assert_eq!(
+            args("set-color keyboard #0050ff --yes").unwrap().command,
+            Command::Change(Change::set_color("keyboard", "#0050ff"))
+        );
+        assert_eq!(
+            args("plan set-color ram-stick-2 00ff00").unwrap().command,
+            Command::Plan(Change::set_color("ram-stick-2", "00ff00"))
         );
         assert_eq!(args("logs --limit 5").unwrap().command, Command::Logs(5));
         assert_eq!(args("logs --limit 9999").unwrap().command, Command::Logs(500));
@@ -256,9 +269,15 @@ mod tests {
 
     #[test]
     fn changes_need_yes_and_bad_input_is_usage() {
-        for line in
-            ["keep ram-stick-1", "apply 0123456789abcdef", "nonsense thing", "plan keep", "--nope", "logs --limit x"]
-        {
+        for line in [
+            "keep ram-stick-1",
+            "apply 0123456789abcdef",
+            "nonsense thing",
+            "plan keep",
+            "--nope",
+            "logs --limit x",
+            "set-color keyboard --yes",
+        ] {
             let e = args(line).unwrap_err();
             assert_eq!(e.code, codes::USAGE, "{line}");
             assert_eq!(e.code.exit_code(), 2);

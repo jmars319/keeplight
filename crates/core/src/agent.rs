@@ -21,8 +21,9 @@ use crate::agent_kit::events::{EventLog, LogEvent, LogLevel};
 use crate::agent_kit::gate::{Authorized, Caller, authorize_write};
 use crate::agent_kit::plan::{Plan, PlanStore, Precondition};
 use crate::agent_kit::{diagnose, journal, now_ms, sha256_hex};
+use crate::device::Rgb;
 use crate::device::{Device, device_id, display_names};
-use crate::keep::{self, ActionError, Dark, HandBack, Kept, Outcome, Setup, SetupError, is_dark};
+use crate::keep::{self, ActionError, Dark, HandBack, KeepError, Kept, Outcome, Setup, SetupError, is_dark};
 use crate::lit_by::lit_by;
 use crate::paths::{Paths, running_programs_for};
 use crate::sdk::{SdkError, Snapshot};
@@ -68,6 +69,15 @@ pub mod codes {
         false,
         Exit::Refused,
     );
+    pub const CANT_COLOR: ErrorCode = ErrorCode::new(
+        "device.cant_color",
+        "That device can't be set to that color: none of its modes takes a color, the color is black, or OpenRGB \
+         doesn't say which mode it's in, so the change couldn't be undone.",
+        "Pick another device, or a color other than #000000 (use keepDark to keep a device dark). For an unknown \
+         mode, set the device in OpenRGB and keep it first.",
+        false,
+        Exit::Refused,
+    );
     pub const OPENRGB_UNREACHABLE: ErrorCode = ErrorCode::new(
         "openrgb.unreachable",
         "OpenRGB isn't answering on its SDK port, so Keeplight can't see or set any light.",
@@ -77,8 +87,8 @@ pub mod codes {
     );
 }
 
-/// Every code Keeplight can return: the kit's ten and its own five.
-pub const ALL_CODES: [ErrorCode; 15] = {
+/// Every code Keeplight can return: the kit's ten and its own six.
+pub const ALL_CODES: [ErrorCode; 16] = {
     let k = kit::ALL;
     [
         k[0],
@@ -95,6 +105,7 @@ pub const ALL_CODES: [ErrorCode; 15] = {
         codes::DEVICE_NOT_KEPT,
         codes::NOTHING_BEFORE,
         codes::CANT_KEEP,
+        codes::CANT_COLOR,
         codes::OPENRGB_UNREACHABLE,
     ]
 };
@@ -113,10 +124,17 @@ pub enum Action {
     /// Stop keeping it; a device in Direct mode with an Onboard mode is handed
     /// back to that, so it isn't left dark.
     StopKeeping,
-    /// Keep a device again as it was kept before you stopped keeping it, and
-    /// send it that setup.
+    /// Keep the setup it had before the last change (stopping keeping it, or
+    /// a new color), and send it that setup. On a kept device the two swap,
+    /// so doing it twice undoes it.
     KeepAsBefore,
+    /// Set the device to `color` and keep that. A mode that takes colors keeps
+    /// its effect in the new color; otherwise it switches to Static, or Direct.
+    SetColor,
 }
+
+const ACTIONS: [Action; 6] =
+    [Action::Keep, Action::KeepDark, Action::PutBack, Action::StopKeeping, Action::KeepAsBefore, Action::SetColor];
 
 impl Action {
     /// The command-line word for it.
@@ -127,13 +145,12 @@ impl Action {
             Action::PutBack => "put-back",
             Action::StopKeeping => "stop-keeping",
             Action::KeepAsBefore => "keep-as-before",
+            Action::SetColor => "set-color",
         }
     }
 
     pub fn from_word(word: &str) -> Option<Action> {
-        [Action::Keep, Action::KeepDark, Action::PutBack, Action::StopKeeping, Action::KeepAsBefore]
-            .into_iter()
-            .find(|a| a.word() == word)
+        ACTIONS.into_iter().find(|a| a.word() == word)
     }
 
     fn event(self) -> &'static str {
@@ -143,6 +160,7 @@ impl Action {
             Action::PutBack => "device.put_back",
             Action::StopKeeping => "device.stopped_keeping",
             Action::KeepAsBefore => "device.kept_as_before",
+            Action::SetColor => "device.color_set",
         }
     }
 }
@@ -155,6 +173,19 @@ pub struct Change {
     /// The device's id ("ram-stick-1") or display name ("RAM stick 1"), as
     /// get_devices lists them.
     pub device: String,
+    /// For setColor only: the color as #rrggbb, such as "#0050ff".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+impl Change {
+    pub fn new(action: Action, device: impl Into<String>) -> Change {
+        Change { action, device: device.into(), color: None }
+    }
+
+    pub fn set_color(device: impl Into<String>, color: impl Into<String>) -> Change {
+        Change { action: Action::SetColor, device: device.into(), color: Some(color.into()) }
+    }
 }
 
 /// A plan's payload: the change and what it will do, in plain words.
@@ -249,6 +280,8 @@ pub enum Effect {
     Kept,
     PutBack(Outcome),
     StoppedKeeping(HandBack),
+    /// Kept in a new color and sent it.
+    ColorSet(Outcome),
 }
 
 /// The result of a change: `apply_plan`, `keeplight-cli <action> --yes`, or a
@@ -316,12 +349,27 @@ pub fn from_action(e: ActionError) -> AgentError {
     match e {
         ActionError::Sdk(e) => from_sdk(e),
         ActionError::Setup(e) => from_setup(e),
+        ActionError::Keep(e @ (KeepError::NoColorMode | KeepError::Black | KeepError::NoUndo)) => {
+            AgentError::new(codes::CANT_COLOR, format!("Keeplight can't set that color: {e}"))
+        }
         ActionError::Keep(e) => AgentError::new(codes::CANT_KEEP, format!("Keeplight can't keep it: {e}")),
         ActionError::NotFound => AgentError::new(codes::DEVICE_NOT_FOUND, ActionError::NotFound.to_string()),
         ActionError::NotKept => AgentError::new(codes::DEVICE_NOT_KEPT, ActionError::NotKept.to_string()),
         ActionError::NothingBefore => AgentError::new(codes::NOTHING_BEFORE, ActionError::NothingBefore.to_string()),
         ActionError::NoLongerDark => AgentError::new(kit::CHANGED_MEANWHILE, ActionError::NoLongerDark.to_string()),
     }
+}
+
+/// A setColor change's color: #rrggbb, or rrggbb.
+fn parse_color(text: Option<&str>) -> Result<Rgb> {
+    let usage = |what: String| AgentError::new(kit::USAGE, format!("{what} Nothing was changed."));
+    let text = text
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| usage("setColor needs a color, such as #0050ff.".into()))?;
+    let hex = if text.starts_with('#') { text.to_string() } else { format!("#{text}") };
+    Rgb::from_hex(&hex.to_lowercase())
+        .ok_or_else(|| usage(format!("\u{201c}{text}\u{201d} isn't a color: use #rrggbb, such as #0050ff.")))
 }
 
 /// Finds a device by id or display name, ignoring case, or by its exact
@@ -390,6 +438,22 @@ pub fn check(change: &Change, devices: &[Device], setup: &Setup) -> Result<Check
                 AgentError::new(codes::NOTHING_BEFORE, format!("{name} has no earlier setup. Nothing was changed."))
             })?;
             vec![format!("Keep {name} as before ({}) and send it that setup.", describe(k))]
+        }
+        Action::SetColor => {
+            let color = parse_color(change.color.as_deref())?;
+            let cant = |e: KeepError| {
+                AgentError::new(
+                    codes::CANT_COLOR,
+                    format!("{name} can't be set to {}: {e} Nothing was changed.", color.hex()),
+                )
+            };
+            let k = Kept::colored(device, color).map_err(cant)?;
+            keep::undo_for(setup, device).map_err(cant)?;
+            let was = match kept {
+                Some(old) => describe(old),
+                None => format!("what it shows now ({})", device.active_mode_name().unwrap_or("its current mode")),
+            };
+            vec![format!("Set {name} to {} and keep it. Keep it as before goes back to {was}.", describe(&k))]
         }
     };
     Ok(Checked { device: device.clone(), name, steps })
@@ -585,7 +649,7 @@ impl Engine {
             // The planned device by its location, not by its id: ids are
             // positions, and OpenRGB can list devices in another order.
             let recheck = |p: &ChangePlan| {
-                let pinned = Change { action: p.change.action, device: p.location.clone() };
+                let pinned = Change { device: p.location.clone(), ..p.change.clone() };
                 let again = check(&pinned, &snapshot.devices, &setup)?;
                 // The same physical device may now be numbered differently
                 // ("RAM stick 2" instead of "RAM stick 1"); compare its steps
@@ -680,6 +744,25 @@ impl Engine {
                 };
                 (Effect::StoppedKeeping(back), words, None)
             }
+            Action::SetColor => {
+                let color = parse_color(change.color.as_deref())?;
+                let (k, outcome) =
+                    keep::set_color_locked(lock, address, &setup, &d.name, &d.location, color).map_err(from_action)?;
+                let (words, held) = match &outcome {
+                    Outcome::Held => (format!("Set {name} to {} and kept it.", describe(&k)), Some(true)),
+                    Outcome::NotHeld => (
+                        format!(
+                            "Keeping {name} as {}, but it reads back as something else after being sent it.",
+                            describe(&k)
+                        ),
+                        Some(false),
+                    ),
+                    Outcome::Skipped(reason) => {
+                        (format!("Keeping {name} as {}, but didn't send it: {reason}.", describe(&k)), None)
+                    }
+                };
+                (Effect::ColorSet(outcome), words, held)
+            }
         };
         let level = if held == Some(false) { LogLevel::Warn } else { LogLevel::Info };
         self.log(level, change.action.event(), write.caller(), Some(name), None, &result, None);
@@ -756,7 +839,7 @@ mod tests {
     }
 
     fn change(action: Action, device: &str) -> Change {
-        Change { action, device: device.into() }
+        Change::new(action, device)
     }
 
     #[test]
@@ -864,6 +947,47 @@ mod tests {
     }
 
     #[test]
+    fn set_color_is_planned_applied_and_undone() {
+        let d = data("set-color");
+        let server = FakeServer::start(vec![testing::ram("SMBus 0x71")]);
+        let e = engine(&server, &d);
+        let plan = e.plan(&Caller::Cli, Change::set_color("ram-stick", "0050FF")).unwrap();
+        assert_eq!(
+            plan.payload.steps,
+            [
+                "Set RAM stick to Chase Fade in #0050ff and keep it. Keep it as before goes back to what it shows now (Chase Fade)."
+            ]
+        );
+        let applied = e.apply(&Caller::Cli, &plan.plan_id, None).unwrap();
+        assert_eq!(applied.held, Some(true));
+        assert_eq!(server.device(0).colors[0], crate::device::Rgb { r: 0, g: 0x50, b: 0xff });
+        let r = e.devices().unwrap();
+        assert_eq!(r.devices[0].kept_as.as_deref(), Some("Chase Fade in #0050ff"));
+        assert_eq!(r.devices[0].kept_before.as_deref(), Some("Chase Fade in #ff0000"));
+        e.change_now(&Caller::Window, change(Action::KeepAsBefore, "ram-stick")).unwrap();
+        assert_eq!(server.device(0).colors[0], RED);
+        assert!(e.recent_events(50).iter().any(|ev| ev.event == "device.color_set"));
+    }
+
+    #[test]
+    fn set_color_needs_a_real_color() {
+        let devices = [testing::ram("a")];
+        let setup = Setup::default();
+        let code = |c: Option<&str>| {
+            let change = Change { color: c.map(str::to_string), ..Change::new(Action::SetColor, "ram-stick") };
+            check(&change, &devices, &setup).unwrap_err().code
+        };
+        assert_eq!(code(None), kit::USAGE);
+        assert_eq!(code(Some("blue")), kit::USAGE);
+        assert_eq!(code(Some("#000000")), codes::CANT_COLOR);
+        let mut unknown = testing::ram("a");
+        unknown.active_mode = None;
+        let change = Change::set_color("ram-stick", "#0050ff");
+        let e = check(&change, &[unknown], &setup).unwrap_err();
+        assert_eq!(e.code, codes::CANT_COLOR, "no undo, so no plan promises one");
+    }
+
+    #[test]
     fn checks_name_what_is_wrong() {
         let devices = [testing::ram("a"), testing::keyboard(crate::device::Rgb::default())];
         let setup = Setup::default();
@@ -934,7 +1058,7 @@ mod tests {
 
     #[test]
     fn actions_have_command_words() {
-        for a in [Action::Keep, Action::KeepDark, Action::PutBack, Action::StopKeeping, Action::KeepAsBefore] {
+        for a in ACTIONS {
             assert_eq!(Action::from_word(a.word()), Some(a));
         }
         assert_eq!(Action::from_word("nope"), None);

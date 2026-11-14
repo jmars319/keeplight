@@ -56,6 +56,22 @@ pub enum KeepError {
     AllOff,
     #[error("OpenRGB doesn't say which mode it's in, so there is nothing to keep yet.")]
     NoMode,
+    #[error("none of its modes takes a color, so it can only show its own lighting.")]
+    NoColorMode,
+    #[error("black turns every light off. To keep it dark, use Keep it dark instead.")]
+    Black,
+    #[error("OpenRGB doesn't say which mode it's in now, so Keep it as before couldn't bring it back afterwards.")]
+    NoUndo,
+}
+
+/// What a new color on `device` replaces, for "Keep it as before": what is
+/// kept for it, or what it shows when it isn't kept. A change that couldn't
+/// be undone is refused.
+pub fn undo_for(setup: &Setup, device: &Device) -> Result<Kept, KeepError> {
+    match setup.find(device) {
+        Some(k) => Ok(k.clone()),
+        None => Kept::capture_dark(device).map_err(|_| KeepError::NoUndo),
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -129,6 +145,43 @@ impl Kept {
             location: device.location.clone(),
             led_count: device.led_count(),
             mode: mode.clone(),
+            colors,
+        })
+    }
+
+    /// `device` in `color`, ready to send and keep. A mode that takes colors
+    /// keeps its effect and gets the new color (red Chase Fade becomes blue
+    /// Chase Fade; owner decision 2026-11-13). A mode that doesn't, such as
+    /// Onboard, a rainbow or Off, is swapped for the device's Static mode, or
+    /// Direct when it has no Static.
+    pub fn colored(device: &Device, color: Rgb) -> Result<Kept, KeepError> {
+        if color.is_black() {
+            return Err(KeepError::Black);
+        }
+        let takes_color = |m: &Mode| {
+            !m.name.eq_ignore_ascii_case("off")
+                && matches!(m.color_mode, color_mode::PER_LED | color_mode::MODE_SPECIFIC)
+        };
+        let named = |name: &str| device.modes.iter().find(|m| m.name.eq_ignore_ascii_case(name) && takes_color(m));
+        let mode = device
+            .active()
+            .filter(|m| takes_color(m))
+            .or_else(|| named("static"))
+            .or_else(|| named("direct"))
+            .ok_or(KeepError::NoColorMode)?;
+        let mut mode = mode.clone();
+        let colors = if mode.color_mode == color_mode::PER_LED {
+            vec![color; device.led_count()]
+        } else {
+            let count = mode.colors.len().max(mode.colors_min as usize).max(1);
+            mode.colors = vec![color; count];
+            Vec::new()
+        };
+        Ok(Kept {
+            name: device.name.clone(),
+            location: device.location.clone(),
+            led_count: device.led_count(),
+            mode,
             colors,
         })
     }
@@ -227,6 +280,15 @@ impl Setup {
         match self.devices.iter_mut().find(|k| k.name == kept.name && k.location == kept.location) {
             Some(existing) => *existing = kept,
             None => self.devices.push(kept),
+        }
+    }
+
+    /// Keeps `kept` and remembers `previous` (what was kept for the device, or
+    /// what it showed) for "Keep it as before", so a change can be undone.
+    pub fn keep_remembering(&mut self, kept: Kept, previous: Option<Kept>) {
+        self.keep(kept);
+        if let Some(previous) = previous {
+            self.before.push(previous);
         }
     }
 }
@@ -443,9 +505,46 @@ pub fn keep_as_before_locked(
     let mut client = Client::connect(address)?;
     let device = find_device(&mut client, name, location)?;
     let earlier = setup.find_before(&device).cloned().ok_or(ActionError::NothingBefore)?;
-    setup.keep(earlier.clone());
+    // A kept device swaps: what it was kept as becomes the earlier setup, so
+    // pressing it again undoes the undo.
+    let current = setup.find(&device).cloned();
+    setup.keep_remembering(earlier.clone(), current);
     setup.save(setup_path)?;
     Ok(put_back(&mut client, &earlier, &device)?)
+}
+
+/// Takes the setup lock, then [`set_color_locked`].
+pub fn set_color(
+    address: &str,
+    setup_path: &Path,
+    name: &str,
+    location: &str,
+    color: Rgb,
+) -> Result<(Kept, Outcome), ActionError> {
+    let lock = SetupLock::acquire(setup_path)?;
+    set_color_locked(&lock, address, setup_path, name, location, color)
+}
+
+/// Sets the named device to `color` (see [`Kept::colored`]), keeps that, and
+/// sends it. What was kept before, or what it showed when it wasn't kept, is
+/// remembered for "Keep it as before".
+pub fn set_color_locked(
+    _held: &SetupLock,
+    address: &str,
+    setup_path: &Path,
+    name: &str,
+    location: &str,
+    color: Rgb,
+) -> Result<(Kept, Outcome), ActionError> {
+    let mut setup = Setup::load(setup_path)?;
+    let mut client = Client::connect(address)?;
+    let device = find_device(&mut client, name, location)?;
+    let kept = Kept::colored(&device, color)?;
+    let previous = undo_for(&setup, &device)?;
+    setup.keep_remembering(kept.clone(), Some(previous));
+    setup.save(setup_path)?;
+    let outcome = put_back(&mut client, &kept, &device)?;
+    Ok((kept, outcome))
 }
 
 /// One kept device's result in [`put_back_all`].
@@ -848,6 +947,100 @@ mod tests {
             keep_as_before(&server.address, &path, "Apex", "HID: keyboard"),
             Err(ActionError::NothingBefore)
         ));
+    }
+
+    #[test]
+    fn a_new_color_keeps_the_effect_when_the_mode_takes_colors() {
+        // Per-light effect: RAM stays Chase Fade, every light blue.
+        let k = Kept::colored(&testing::ram("SMBus 0x71"), BLUE).unwrap();
+        assert_eq!(k.mode.name, "Chase Fade");
+        assert_eq!(k.colors, vec![BLUE; 8]);
+        // A mode with its own colors: Static stays Static, its color blue.
+        let k = Kept::colored(&testing::board(), BLUE).unwrap();
+        assert_eq!(k.mode.name, "Static");
+        assert_eq!(k.mode.colors, vec![BLUE]);
+        assert!(k.colors.is_empty());
+    }
+
+    #[test]
+    fn a_new_color_swaps_a_mode_without_colors_for_static_then_direct() {
+        // Rainbow RAM has no Static, so Direct.
+        let k = Kept::colored(&rainbow_ram("SMBus 0x71"), BLUE).unwrap();
+        assert_eq!(k.mode.name, "Direct");
+        assert_eq!(k.colors, vec![BLUE; 8]);
+        // A keyboard on its own Onboard lighting: Direct.
+        let mut kb = testing::keyboard(RED);
+        kb.active_mode = Some(1);
+        assert_eq!(Kept::colored(&kb, BLUE).unwrap().mode.name, "Direct");
+        // A board on a rainbow: Static, ahead of Direct.
+        let mut board = testing::board();
+        board.modes.push(Mode { name: "Rainbow".into(), color_mode: color_mode::NONE, ..Mode::default() });
+        board.active_mode = Some(2);
+        assert_eq!(Kept::colored(&board, BLUE).unwrap().mode.name, "Static");
+    }
+
+    #[test]
+    fn a_new_color_refuses_black_and_devices_with_no_colorable_mode() {
+        assert_eq!(Kept::colored(&testing::ram("a"), Rgb::default()), Err(KeepError::Black));
+        let mut fixed = testing::ram("a");
+        fixed.modes.retain(|m| m.name == "Rainbow");
+        fixed.active_mode = Some(0);
+        assert_eq!(Kept::colored(&fixed, BLUE), Err(KeepError::NoColorMode));
+    }
+
+    #[test]
+    fn setting_a_color_keeps_it_and_keep_it_as_before_swaps_back_and_forth() {
+        let path = temp_path("set-color");
+        let server = FakeServer::start(vec![testing::ram("SMBus 0x71")]);
+        keep_now(&server.address, &path, "ENE DRAM", "SMBus 0x71", Dark::Refuse).unwrap();
+
+        let (kept, outcome) = set_color(&server.address, &path, "ENE DRAM", "SMBus 0x71", BLUE).unwrap();
+        assert_eq!(outcome, Outcome::Held);
+        assert_eq!(kept.mode.name, "Chase Fade");
+        assert_eq!(server.device(0).colors, vec![BLUE; 8]);
+        let setup = Setup::load(&path).unwrap();
+        assert_eq!(setup.devices[0].colors, vec![BLUE; 8]);
+        assert_eq!(setup.before[0].colors, vec![RED; 8], "the red it had is remembered");
+
+        // Undo: red again, and blue remembered, so pressing it again redoes.
+        keep_as_before(&server.address, &path, "ENE DRAM", "SMBus 0x71").unwrap();
+        assert_eq!(server.device(0).colors, vec![RED; 8]);
+        let setup = Setup::load(&path).unwrap();
+        assert_eq!((setup.devices.len(), setup.before.len()), (1, 1));
+        assert_eq!(setup.before[0].colors, vec![BLUE; 8]);
+        keep_as_before(&server.address, &path, "ENE DRAM", "SMBus 0x71").unwrap();
+        assert_eq!(server.device(0).colors, vec![BLUE; 8]);
+    }
+
+    #[test]
+    fn setting_a_color_on_a_device_not_kept_remembers_what_it_showed() {
+        let path = temp_path("set-color-new");
+        let mut kb = testing::keyboard(RED);
+        kb.active_mode = Some(1);
+        let server = FakeServer::start(vec![kb]);
+        set_color(&server.address, &path, "Apex", "HID: keyboard", BLUE).unwrap();
+        assert_eq!(server.device(0).active_mode_name(), Some("Direct"));
+        assert_eq!(server.device(0).colors, vec![BLUE; 6]);
+        let setup = Setup::load(&path).unwrap();
+        assert_eq!(setup.before[0].mode.name, "Onboard", "Keep it as before hands it back to its own lighting");
+    }
+
+    #[test]
+    fn a_new_color_is_refused_when_it_couldnt_be_undone() {
+        let path = temp_path("set-color-no-undo");
+        let mut unknown = testing::ram("SMBus 0x71");
+        unknown.active_mode = None;
+        // It can take a color (Direct), but what it shows now can't be kept.
+        assert!(Kept::colored(&unknown, BLUE).is_ok());
+        assert_eq!(undo_for(&Setup::default(), &unknown), Err(KeepError::NoUndo));
+        let server = FakeServer::start(vec![unknown]);
+        let sent_before = server.seen_ids().iter().filter(|&&id| id == packet::UPDATE_MODE).count();
+        assert!(matches!(
+            set_color(&server.address, &path, "ENE DRAM", "SMBus 0x71", BLUE),
+            Err(ActionError::Keep(KeepError::NoUndo))
+        ));
+        assert_eq!(server.seen_ids().iter().filter(|&&id| id == packet::UPDATE_MODE).count(), sent_before);
+        assert!(Setup::load(&path).unwrap().devices.is_empty(), "nothing saved");
     }
 
     #[test]

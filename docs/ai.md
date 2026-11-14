@@ -35,9 +35,10 @@ A change is one action on one device:
 | `keepDark` | Keep a device whose every light is off, so it's turned back off after sleep. Only when it is dark. |
 | `putBack` | Send a kept device its kept setup. |
 | `stopKeeping` | Stop keeping it. A device in Direct mode with an Onboard mode is handed back to that, so it isn't left dark. |
-| `keepAsBefore` | After `stopKeeping`, keep it again as it was and send it that setup. |
+| `keepAsBefore` | Go back to the setup it had before the last `stopKeeping` or `setColor`, and send it that. On a kept device the two swap, so doing it again redoes the change. |
+| `setColor` | Set the device to `color` (`#rrggbb`) and keep it. A mode that takes colors keeps its effect in the new color (red Chase Fade becomes blue Chase Fade); a mode that doesn't, such as Onboard or a rainbow, switches to Static, or Direct. Black is refused: use `keepDark`. |
 
-Colors are set in OpenRGB, not through Keeplight: Keeplight keeps and restores them. Nothing an AI app can do is irreversible. Every action can be undone by another action.
+For one color on the whole PC, plan a `setColor` for each device. Nothing an AI app can do is irreversible: every action can be undone by another, and a new color by `keepAsBefore`.
 
 Results are the same JSON as `keeplight-cli --json`, in the shapes under [`schema/`](../schema/). On failure a tool returns an error result (`isError`) holding an `ErrorReport`: a stable `code`, a `message`, a `hint` and whether retrying can work.
 

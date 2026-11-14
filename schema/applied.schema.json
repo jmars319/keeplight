@@ -79,9 +79,14 @@
           "const": "stopKeeping"
         },
         {
-          "description": "Keep a device again as it was kept before you stopped keeping it, and\nsend it that setup.",
+          "description": "Keep the setup it had before the last change (stopping keeping it, or\na new color), and send it that setup. On a kept device the two swap,\nso doing it twice undoes it.",
           "type": "string",
           "const": "keepAsBefore"
+        },
+        {
+          "description": "Set the device to `color` and keep that. A mode that takes colors keeps\nits effect in the new color; otherwise it switches to Static, or Direct.",
+          "type": "string",
+          "const": "setColor"
         }
       ]
     },
@@ -91,6 +96,13 @@
       "properties": {
         "action": {
           "$ref": "#/$defs/Action"
+        },
+        "color": {
+          "description": "For setColor only: the color as #rrggbb, such as \"#0050ff\".",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "device": {
           "description": "The device's id (\"ram-stick-1\") or display name (\"RAM stick 1\"), as\nget_devices lists them.",
