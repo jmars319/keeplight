@@ -39,6 +39,9 @@ pub struct View {
     /// this PC; empty otherwise.
     pub installs: String,
     pub installs_warn: bool,
+    /// What Keeplight offers to install: (key, button label, the sentence the
+    /// confirm step shows).
+    pub offer: Option<(String, String, String)>,
 }
 
 /// The sign-in switch's state and sentence. `current` is the registered
@@ -130,6 +133,23 @@ pub struct Row {
     pub lit_by_warn: bool,
 }
 
+/// The window's offer for a tested installer: its key, its button and what
+/// the confirm step says.
+pub fn offer(p: &keeplight_core::installs::Pinned) -> (String, String, String) {
+    let name = p.product.name();
+    (
+        p.product.key().to_string(),
+        format!("Install {name} {}…", p.version),
+        format!(
+            "Keeplight downloads {name} {} ({} MB) from {}, checks it against the copy it's tested with, and runs \
+             its own installer. Windows asks for admin rights first.",
+            p.version,
+            p.megabytes(),
+            p.host()
+        ),
+    )
+}
+
 /// One zone of a device, for a swatch and the picker's zone choice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneItem {
@@ -206,6 +226,7 @@ pub fn build(
         ai_changes: false,
         installs: String::new(),
         installs_warn: false,
+        offer: None,
     }
 }
 
@@ -351,6 +372,7 @@ fn message(chip: &str, heading: &str, message: &str) -> View {
         ai_changes: false,
         installs: String::new(),
         installs_warn: false,
+        offer: None,
     }
 }
 
@@ -437,6 +459,18 @@ mod tests {
         let v = build(&snap(vec![device(Kind::Keyboard, "Apex", "Direct", colors, false)]), &empty(), "a", None, &[]);
         assert_eq!(v.rows[0].swatch, Some((255, 0, 0)));
         assert!(v.rows[0].can_keep);
+    }
+
+    #[test]
+    fn the_install_offer_says_what_happens_before_it_starts() {
+        let openrgb = keeplight_core::installs::TESTED.iter().find(|t| t.product.key() == "openrgb").unwrap();
+        let (key, label, text) = offer(openrgb);
+        assert_eq!((key.as_str(), label.as_str()), ("openrgb", "Install OpenRGB 1.0.0…"));
+        assert_eq!(
+            text,
+            "Keeplight downloads OpenRGB 1.0.0 (24 MB) from codeberg.org, checks it against the copy it's tested \
+             with, and runs its own installer. Windows asks for admin rights first."
+        );
     }
 
     #[test]
