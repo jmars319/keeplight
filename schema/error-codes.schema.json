@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErrorCodeList",
+  "type": "object",
+  "properties": {
+    "codes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ErrorCodeInfo"
+      }
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "codes"
+  ],
+  "$defs": {
+    "ErrorCodeInfo": {
+      "description": "One entry of the list of error codes.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "hint": {
+          "type": "string"
+        },
+        "meaning": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "meaning",
+        "hint",
+        "retryable",
+        "exitCode"
+      ]
+    }
+  }
+}

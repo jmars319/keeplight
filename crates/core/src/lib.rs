@@ -7,10 +7,17 @@
 //! light, and only for devices in the setup. `docs/safety-model.md` lists
 //! every request.
 
+// The agent-interface kit, copied byte-identical from jamarq-agent-kit.
+// Never edit it here: `agent_kit::tests::this_copy_matches_its_record` fails.
+#[rustfmt::skip]
+pub mod agent_kit;
+pub mod agent;
 pub mod device;
 pub mod keep;
 pub mod keeper;
 pub mod lit_by;
+pub mod mcp_server;
+pub mod paths;
 pub mod sdk;
 pub mod settings;
 

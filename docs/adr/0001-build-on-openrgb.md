@@ -29,3 +29,7 @@ The plan named `openrgb2` (0.4.1, 2026-09-05) as the Rust client, since it is th
 - Keeplight depends on OpenRGB's SDK server running. The window says so plainly when it is not.
 - The client is small, but it is ours to maintain. If OpenRGB changes the protocol 3 layout, Keeplight stops reading devices until the client is updated. The parser fails with an error rather than misreading, and the version is negotiated, so the server keeps sending the layout Keeplight asked for.
 - If the SDK cannot do something Keeplight needs, the fallback is a small patch to the bundled OpenRGB, not a fork of the whole program.
+
+## Amendment, 2026-11-13: tokio for the MCP server only
+
+Keeplight is the pilot for the fleet's agent-interface kit (`docs/agent-interfaces.md` in agentic-instructions), whose MCP server is built on `rmcp` and needs tokio. The owner decided on 2026-11-13 to lift the tokio ban for that edge only. `deny.toml` now allows tokio only as a dependency of `rmcp` (with its `tokio-stream` and `tokio-util`) and `keeplight-core`, where `mcp_server::serve` runs a single-thread runtime for `keeplight-cli mcp`. The OpenRGB client, the window and the keeper stay synchronous and never start a runtime. The bans on HTTP and TLS crates are unchanged, and `axum` joined them. See `docs/ai.md`.

@@ -3,7 +3,7 @@ import "../../../assets/fonts/Geist-Regular.ttf";
 import "../../../assets/fonts/Geist-SemiBold.ttf";
 import "../../../assets/fonts/Geist-Bold.ttf";
 import "../../../assets/fonts/GeistMono-Regular.ttf";
-import { Palette, ScrollView } from "std-widgets.slint";
+import { LineEdit, Palette, ScrollView } from "std-widgets.slint";
 import { Button, Switch, Theme } from "theme.slint";
 
 export struct DeviceRow {
@@ -62,6 +62,13 @@ export global Ui {
     // The keeper's icon in the notification area (off by default).
     in-out property <bool> tray-icon;
     callback set-tray-icon(bool);
+    // "Let AI tools make changes" (aiChanges, off by default), and each AI
+    // app's line for connecting to keeplight-cli's MCP server.
+    in-out property <bool> ai-changes;
+    callback set-ai-changes(bool);
+    in property <string> mcp-claude;
+    in property <string> mcp-gemini;
+    in property <string> mcp-codex;
 }
 
 component Chip inherits Rectangle {
@@ -359,6 +366,25 @@ export component AppWindow inherits Window {
                         text: "Show the keeper's icon in the notification area";
                         checked <=> Ui.tray-icon;
                         toggled => { Ui.set-tray-icon(self.checked); }
+                    }
+                    Switch {
+                        text: "Let AI tools make changes";
+                        checked <=> Ui.ai-changes;
+                        toggled => { Ui.set-ai-changes(self.checked); }
+                    }
+                    Text {
+                        text: Ui.ai-changes
+                            ? "AI tools you connect can keep, put back and stop keeping devices when you ask. Each change is planned first and recorded with your request."
+                            : "Off: AI tools you connect can read your lights and plan changes, but change nothing. To connect one, run its line once in a terminal (click a line, then Ctrl+A and Ctrl+C):";
+                        font-size: 12px;
+                        color: Theme.secondary-text;
+                        wrap: word-wrap;
+                    }
+                    for line in [Ui.mcp-claude, Ui.mcp-gemini, Ui.mcp-codex]: LineEdit {
+                        text: line;
+                        read-only: true;
+                        font-size: 11px;
+                        accessible-label: "Command to connect an AI app: " + line;
                     }
                     if Ui.last-run != "": Text {
                         text: "Last run: " + Ui.last-run;

@@ -37,10 +37,20 @@ Tests against a fake server hold this, including `put_back_all_restores_every_ke
 ## Written by the app
 
 - `%LOCALAPPDATA%\Keeplight\setup.json`, or `setup.json` in `KEEPLIGHT_DATA` when that is set: the devices you pressed **Keep this** on, each with its product name, location, light count, mode and colors, plus what each device you stopped keeping was kept as. Written through a temporary file and a rename. A setup Keeplight can't read is never saved over; the window says so and turns Keep and Put back off.
+- `plans\<16 hex digits>.json`: plans from the command line and AI tools, deleted when applied or once expired. `journal.jsonl` and `logs\keeplight-YYYY-MM-DD.jsonl`: see "Changes from AI tools" above. `settings.json` also holds `aiChanges`.
 - `setup.lock` beside it: an empty file the window and the keeper lock while they change the setup or send a kept setup, so a device you stopped keeping can't be put back by a keeper run that read the setup earlier.
 - `keeper.log` beside it: one line each time the keeper runs, saying how many kept devices it put back, plus a line for each that didn't hold. Trimmed to its last 400 lines once it passes 800.
 - `settings.json` beside it: Keeplight's preferences, today only whether the keeper shows its icon in the notification area (off by default). A missing or unreadable file means the defaults.
 - The startup entry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `Keeplight`, holding `"<path to keeplight.exe>" --keep`. Written only when you turn on **Put kept lights back when you sign in**, and removed when you turn it off or uninstall. `KEEPLIGHT_STARTUP_NAME` renames the value, which the smoke test uses so it never touches the real one.
+
+## Changes from AI tools and the command line
+
+`keeplight-cli` (the command line, and its MCP server `keeplight-cli mcp`, see `docs/ai.md`) offers the same five changes as the window's buttons: keep, keep dark, put back, stop keeping and keep as before, one device at a time, and nothing else. It sends OpenRGB only the requests listed above.
+
+- **Plan, then apply.** Every change from the command line or an AI tool is planned first by the same check that applies it (`agent::check`). A plan records its steps, the setup file's SHA-256 and the device's current mode and colors, expires after 10 minutes and is applied once. Applying refuses when the setup or the device changed since, or when the check now gives different steps.
+- **AI changes are off by default.** "Let AI tools make changes" is stored as `aiChanges` in `settings.json` and turned on only from the window. While off, `apply_plan` is refused with `ai.changes_off`; while on, it still needs the user's request in their own words. The command line needs `--yes` for any change.
+- **A record.** Every applied plan goes to `journal.jsonl` (time, caller, plan, request, steps), and every change and failure from any front end goes to `logs/keeplight-YYYY-MM-DD.jsonl` (UTC, kept 14 days), with who made it: `gui`, `cli`, `mcp:<app>` or `keeper`.
+- **No network.** The MCP server speaks only over the stdin and stdout of the app that started it. It opens no port.
 
 ## Read from Windows
 

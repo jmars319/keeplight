@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Plan",
+  "description": "A checked change, waiting to be applied by its `planId`.",
+  "type": "object",
+  "properties": {
+    "contentHash": {
+      "description": "SHA-256 over the target, the payload and the preconditions.",
+      "type": "string"
+    },
+    "createdAtMs": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "expiresAtMs": {
+      "description": "After this, the plan can't be applied; plan again.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "payload": {
+      "description": "The app's changes and the steps it will take, in plain words.",
+      "$ref": "#/$defs/ChangePlan"
+    },
+    "planId": {
+      "description": "The handle to apply it with. Used once.",
+      "type": "string"
+    },
+    "preconditions": {
+      "description": "Applying refuses if any of these has changed since.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Precondition"
+      }
+    },
+    "schemaVersion": {
+      "description": "The app's own schema version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "target": {
+      "description": "What it is for: a folder, a book, an account, as the app names it.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "planId",
+    "target",
+    "payload",
+    "preconditions",
+    "contentHash",
+    "createdAtMs",
+    "expiresAtMs"
+  ],
+  "$defs": {
+    "Action": {
+      "description": "What a change does to one device.",
+      "oneOf": [
+        {
+          "description": "Keep what the device shows now. Changes no light.",
+          "type": "string",
+          "const": "keep"
+        },
+        {
+          "description": "Keep a device whose every light is off, so it is turned back off after\nsleep. Changes no light now.",
+          "type": "string",
+          "const": "keepDark"
+        },
+        {
+          "description": "Send a kept device its kept setup.",
+          "type": "string",
+          "const": "putBack"
+        },
+        {
+          "description": "Stop keeping it; a device in Direct mode with an Onboard mode is handed\nback to that, so it isn't left dark.",
+          "type": "string",
+          "const": "stopKeeping"
+        },
+        {
+          "description": "Keep a device again as it was kept before you stopped keeping it, and\nsend it that setup.",
+          "type": "string",
+          "const": "keepAsBefore"
+        }
+      ]
+    },
+    "Change": {
+      "description": "One change the user asked for.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "device": {
+          "description": "The device's id (\"ram-stick-1\") or display name (\"RAM stick 1\"), as\nget_devices lists them.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "device"
+      ]
+    },
+    "ChangePlan": {
+      "description": "A plan's payload: the change and what it will do, in plain words.",
+      "type": "object",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/Change"
+        },
+        "deviceName": {
+          "description": "The device's display name, such as \"RAM stick 1\".",
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "product": {
+          "description": "The product name and location OpenRGB reported for it when planned.\nApplying acts on the device at that location, never on whichever one\nholds the same id after OpenRGB lists devices in another order.",
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "change",
+        "deviceName",
+        "product",
+        "location",
+        "steps"
+      ]
+    },
+    "Precondition": {
+      "description": "Something a plan depends on, as it was when the plan was made.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The file's path or the record's key.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/PreconditionKind"
+        },
+        "sha256": {
+          "description": "SHA-256 of its contents then, or `None` when it did not exist.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ]
+    },
+    "PreconditionKind": {
+      "description": "What a precondition names.",
+      "oneOf": [
+        {
+          "description": "A file, by its path. The kit hashes it again on apply.",
+          "type": "string",
+          "const": "file"
+        },
+        {
+          "description": "A record the app understands (a row, an entry, a remote object), by\nits key. The app hashes it again on apply.",
+          "type": "string",
+          "const": "record"
+        }
+      ]
+    }
+  }
+}

@@ -1,9 +1,7 @@
 //! Turns what OpenRGB reported, and what you chose to keep, into the words
 //! the window shows. Plain Rust, so it is tested without a window.
 
-use std::collections::HashMap;
-
-use keeplight_core::device::{Device, Kind};
+use keeplight_core::device::Device;
 use keeplight_core::keep::{Fit, KeepError, Kept, Setup, is_dark};
 use keeplight_core::sdk::Snapshot;
 
@@ -35,6 +33,8 @@ pub struct View {
     pub last_run: String,
     /// Whether the keeper shows its icon in the notification area.
     pub tray_icon: bool,
+    /// "Let AI tools make changes".
+    pub ai_changes: bool,
 }
 
 /// The sign-in switch's state and sentence. `current` is the registered
@@ -184,6 +184,7 @@ pub fn build(
         sign_in_note: String::new(),
         last_run: String::new(),
         tray_icon: false,
+        ai_changes: false,
     }
 }
 
@@ -195,18 +196,11 @@ pub struct Notice {
 }
 
 fn rows(devices: &[Device], setup: Option<&Setup>, running: &[String]) -> Vec<Row> {
-    let mut totals: HashMap<Kind, usize> = HashMap::new();
-    for d in devices {
-        *totals.entry(d.kind).or_default() += 1;
-    }
-    let mut seen: HashMap<Kind, usize> = HashMap::new();
+    let names = keeplight_core::device::display_names(devices);
     devices
         .iter()
-        .map(|d| {
-            let n = seen.entry(d.kind).or_default();
-            *n += 1;
-            let name =
-                if totals[&d.kind] > 1 { format!("{} {}", d.kind.label(), n) } else { d.kind.label().to_string() };
+        .zip(names)
+        .map(|(d, name)| {
             let mut meta = plural(d.led_count(), "light");
             if let Some(mode) = d.active_mode_name() {
                 meta.push_str(" · ");
@@ -309,6 +303,7 @@ fn message(chip: &str, heading: &str, message: &str) -> View {
         sign_in_note: String::new(),
         last_run: String::new(),
         tray_icon: false,
+        ai_changes: false,
     }
 }
 
@@ -318,7 +313,7 @@ fn plural(n: usize, word: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use keeplight_core::device::{Mode, Rgb, Zone, color_mode};
+    use keeplight_core::device::{Kind, Mode, Rgb, Zone, color_mode};
 
     use super::*;
 

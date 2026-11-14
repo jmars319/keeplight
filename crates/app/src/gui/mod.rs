@@ -5,12 +5,13 @@
 
 mod view;
 
-use std::path::Path;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use keeplight_core::keep::{self, Dark, HandBack, Outcome, Setup};
+use keeplight_core::agent::{Action, Change, Effect, Engine};
+use keeplight_core::agent_kit::gate::Caller;
+use keeplight_core::keep::{HandBack, Outcome, Setup};
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
@@ -38,6 +39,7 @@ pub fn run() -> i32 {
     let (tx, rx) = mpsc::channel::<Command>();
     let address = crate::platform::openrgb_address();
     let setup_path = crate::platform::setup_path();
+    let engine = Engine::new(keeplight_core::paths::Paths::from_env(), address.clone());
     let weak = ui.as_weak();
     std::thread::spawn(move || {
         let mut notice: Option<view::Notice> = None;
@@ -45,19 +47,21 @@ pub fn run() -> i32 {
             let result = keeplight_core::sdk::snapshot(&address).map_err(|e| e.to_string());
             let setup = Setup::load(&setup_path).map_err(|e| e.to_string());
             // This PC's programs only say something about devices on this PC.
-            let running = if is_this_pc(&address) { crate::platform::running_programs() } else { Vec::new() };
+            let running = keeplight_core::paths::running_programs_for(&address);
             let mut v = view::build(&result, &setup, &address, notice.as_ref(), &running);
             let kept = setup.as_ref().map_or(0, |s| s.devices.len());
             let this_exe = crate::platform::startup::command_for_this_exe().ok();
             (v.sign_in, v.sign_in_note) =
                 view::sign_in(crate::platform::startup::current().as_deref(), this_exe.as_deref(), kept);
             v.last_run = crate::platform::last_keeper_run().unwrap_or_default();
-            v.tray_icon = keeplight_core::settings::Settings::load(&crate::platform::settings_path()).tray_icon;
+            let settings = keeplight_core::settings::Settings::load(&crate::platform::settings_path());
+            v.tray_icon = settings.tray_icon;
+            v.ai_changes = settings.ai_changes;
             if weak.upgrade_in_event_loop(move |ui| apply(&ui, v)).is_err() {
                 return;
             }
             match rx.recv_timeout(REFRESH) {
-                Ok(command) => notice = Some(run_command(&command, &address, &setup_path)),
+                Ok(command) => notice = Some(run_command(&command, &engine)),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
@@ -90,6 +94,18 @@ pub fn run() -> i32 {
             let _ = tx.send(Command::TrayIcon(on));
         });
     }
+    {
+        let tx = tx.clone();
+        g.on_set_ai_changes(move |on| {
+            let _ = tx.send(Command::AiChanges(on));
+        });
+    }
+    // The lines that connect an AI app to Keeplight's MCP server, with the
+    // real path to keeplight-cli.exe beside this exe.
+    let [claude, gemini, codex] = connect_commands(&cli_path());
+    g.set_mcp_claude(claude.into());
+    g.set_mcp_gemini(gemini.into());
+    g.set_mcp_codex(codex.into());
 
     let _repaint = repaint_after_restore(&ui);
     match ui.run() {
@@ -99,13 +115,6 @@ pub fn run() -> i32 {
             1
         }
     }
-}
-
-/// Whether an OpenRGB address is on this PC: a loopback host. Anything else
-/// is another computer, whose lighting apps this PC can't see.
-fn is_this_pc(address: &str) -> bool {
-    use std::net::ToSocketAddrs;
-    address.to_socket_addrs().map(|mut a| a.all(|a| a.ip().is_loopback())).unwrap_or(false)
 }
 
 /// A button press, carrying the row it came from.
@@ -121,69 +130,87 @@ enum Command {
     SignIn(bool),
     /// Show or hide the keeper's icon in the notification area.
     TrayIcon(bool),
+    /// "Let AI tools make changes".
+    AiChanges(bool),
 }
 
-fn run_command(command: &Command, address: &str, setup_path: &Path) -> view::Notice {
+/// A device button: the engine checks and makes the change, logs it as
+/// `gui`, and says what happened; this words it for the notice line.
+fn device_change(engine: &Engine, action: Action, row: &DeviceRow) -> view::Notice {
+    let note = |text: String, warn: bool| view::Notice { text, warn };
+    let name = &row.name;
+    let applied = match engine.change_now(&Caller::Window, Change { action, device: row.location_key.to_string() }) {
+        Ok(a) => a,
+        Err(e) => {
+            let what = match action {
+                Action::Keep | Action::KeepDark => "keep",
+                Action::PutBack => "put back",
+                Action::StopKeeping => "stop keeping",
+                Action::KeepAsBefore => "keep as before",
+            };
+            return note(format!("Couldn't {what} {name}. {}", e.message), true);
+        }
+    };
+    match (action, applied.effect) {
+        (Action::KeepDark, _) => note(format!("Kept {name} dark. The keeper turns it back off after sleep."), false),
+        (_, Some(Effect::Kept)) => note(format!("Kept {name}. Put back returns it to what it shows now."), false),
+        (Action::KeepAsBefore, Some(Effect::PutBack(o))) => match o {
+            Outcome::Held => note(format!("Keeping {name} as before, and put it back."), false),
+            Outcome::NotHeld => note(
+                format!("Keeping {name} as before, but it reads back as something else after being sent it."),
+                true,
+            ),
+            Outcome::Skipped(reason) => note(format!("Keeping {name} as before, but didn't send it: {reason}."), true),
+        },
+        (_, Some(Effect::PutBack(o))) => match o {
+            Outcome::Held => note(format!("Put {name} back."), false),
+            Outcome::NotHeld => note(
+                format!(
+                    "Sent {name} its kept setup, but it reads back as something else. Another program may be setting \
+                     it, or it can't show that setup."
+                ),
+                true,
+            ),
+            Outcome::Skipped(reason) => note(format!("Didn't change {name}: {reason}."), true),
+        },
+        (_, Some(Effect::StoppedKeeping(back))) => match back {
+            HandBack::OwnLighting(mode) => {
+                note(format!("Stopped keeping {name}. It's back on its own {mode} lighting."), false)
+            }
+            HandBack::NotTaken(mode, now) => note(
+                format!(
+                    "Stopped keeping {name}. It was sent its own {mode} lighting but still reports {now}. If it's dark, \
+                     set it in OpenRGB or unplug it and plug it back in."
+                ),
+                true,
+            ),
+            HandBack::LeftAsIs => {
+                note(format!("Stopped keeping {name}. It keeps showing what it shows now until it loses power."), false)
+            }
+            HandBack::NotListed => {
+                note(format!("Stopped keeping {name}. OpenRGB doesn't list it right now, so nothing was sent."), false)
+            }
+        },
+        (_, None) => note(applied.result, false),
+    }
+}
+
+fn run_command(command: &Command, engine: &Engine) -> view::Notice {
     let note = |text: String, warn: bool| view::Notice { text, warn };
     match command {
-        Command::Keep(row) => match keep::keep_now(address, setup_path, &row.name_key, &row.location_key, Dark::Refuse)
-        {
-            Ok(_) => note(format!("Kept {}. Put back returns it to what it shows now.", row.name), false),
-            Err(e) => note(format!("Couldn't keep {}. {e}", row.name), true),
-        },
-        Command::KeepDark(row) => {
-            match keep::keep_now(address, setup_path, &row.name_key, &row.location_key, Dark::Allow) {
-                Ok(_) => note(format!("Kept {} dark. The keeper turns it back off after sleep.", row.name), false),
-                Err(e @ keep::ActionError::NoLongerDark) => note(format!("Didn't keep {}. {e}", row.name), true),
-                Err(e) => note(format!("Couldn't keep {}. {e}", row.name), true),
-            }
-        }
-        Command::KeepAsBefore(row) => {
-            match keep::keep_as_before(address, setup_path, &row.name_key, &row.location_key) {
-                Ok(Outcome::Held) => note(format!("Keeping {} as before, and put it back.", row.name), false),
-                Ok(Outcome::NotHeld) => note(
-                    format!("Keeping {} as before, but it reads back as something else after being sent it.", row.name),
-                    true,
-                ),
-                Ok(Outcome::Skipped(reason)) => {
-                    note(format!("Keeping {} as before, but didn't send it: {reason}.", row.name), true)
-                }
-                Err(e) => note(format!("Couldn't keep {} as before. {e}", row.name), true),
-            }
-        }
-        Command::StopKeeping(row) => match keep::stop_keeping(address, setup_path, &row.name_key, &row.location_key) {
-            Ok(HandBack::OwnLighting(mode)) => {
-                note(format!("Stopped keeping {}. It's back on its own {mode} lighting.", row.name), false)
-            }
-            Ok(HandBack::NotTaken(mode, now)) => note(
-                format!(
-                    "Stopped keeping {}. It was sent its own {mode} lighting but still reports {now}. If it's \
-                         dark, set it in OpenRGB or unplug it and plug it back in.",
-                    row.name
-                ),
-                true,
-            ),
-            Ok(HandBack::LeftAsIs) => note(
-                format!("Stopped keeping {}. It keeps showing what it shows now until it loses power.", row.name),
+        Command::Keep(row) => device_change(engine, Action::Keep, row),
+        Command::KeepDark(row) => device_change(engine, Action::KeepDark, row),
+        Command::PutBack(row) => device_change(engine, Action::PutBack, row),
+        Command::StopKeeping(row) => device_change(engine, Action::StopKeeping, row),
+        Command::KeepAsBefore(row) => device_change(engine, Action::KeepAsBefore, row),
+        Command::AiChanges(on) => match (engine.set_ai_changes(*on), on) {
+            (Ok(()), true) => note(
+                "AI tools you connect can now change what Keeplight keeps and put lights back, when you ask them to."
+                    .into(),
                 false,
             ),
-            Ok(HandBack::NotListed) => note(
-                format!("Stopped keeping {}. OpenRGB doesn't list it right now, so nothing was sent.", row.name),
-                false,
-            ),
-            Err(e) => note(format!("Couldn't stop keeping {}. {e}", row.name), true),
-        },
-        Command::PutBack(row) => match keep::put_back_now(address, setup_path, &row.name_key, &row.location_key) {
-            Ok(Outcome::Held) => note(format!("Put {} back.", row.name), false),
-            Ok(Outcome::NotHeld) => note(
-                format!(
-                    "Sent {} its kept setup, but it reads back as something else. Another program may be setting it, or it can't show that setup.",
-                    row.name
-                ),
-                true,
-            ),
-            Ok(Outcome::Skipped(reason)) => note(format!("Didn't change {}: {reason}.", row.name), true),
-            Err(e) => note(format!("Couldn't put {} back. {e}", row.name), true),
+            (Ok(()), false) => note("AI tools can read and plan, but change nothing.".into(), false),
+            (Err(e), _) => note(format!("Couldn't save that setting. {e}"), true),
         },
         Command::SignIn(on) => {
             use crate::platform::startup;
@@ -234,6 +261,7 @@ fn apply(ui: &AppWindow, v: view::View) {
     g.set_sign_in_note(v.sign_in_note.into());
     g.set_last_run(v.last_run.into());
     g.set_tray_icon(v.tray_icon);
+    g.set_ai_changes(v.ai_changes);
     g.set_notice(v.notice.into());
     g.set_notice_warn(v.notice_warn);
     g.set_screen(match v.screen {
@@ -321,16 +349,39 @@ fn window_hwnd(ui: &AppWindow) -> Option<windows::Win32::Foundation::HWND> {
     }
 }
 
+/// `keeplight-cli.exe`, installed beside `keeplight.exe`.
+fn cli_path() -> std::path::PathBuf {
+    let exe = std::env::current_exe().unwrap_or_default();
+    exe.with_file_name("keeplight-cli.exe")
+}
+
+/// Each AI app's own command for adding Keeplight's MCP server, for the user
+/// to run once. Keeplight never edits another app's settings.
+fn connect_commands(cli: &std::path::Path) -> [String; 3] {
+    let cli = cli.display();
+    [
+        format!("claude mcp add --scope user keeplight -- \"{cli}\" mcp"),
+        format!("gemini mcp add --scope user keeplight \"{cli}\" mcp"),
+        format!("codex mcp add keeplight -- \"{cli}\" mcp"),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_this_pc;
+    use super::connect_commands;
 
     #[test]
-    fn only_loopback_addresses_are_this_pc() {
-        assert!(is_this_pc("127.0.0.1:6742"));
-        assert!(is_this_pc("localhost:6742"));
-        assert!(is_this_pc("[::1]:6742"));
-        assert!(!is_this_pc("192.168.1.20:6742"));
-        assert!(!is_this_pc("not an address"));
+    fn connect_commands_quote_the_path_and_use_user_scope() {
+        let [claude, gemini, codex] =
+            connect_commands(std::path::Path::new(r"C:\Program Files\Keeplight\keeplight-cli.exe"));
+        assert_eq!(
+            claude,
+            r#"claude mcp add --scope user keeplight -- "C:\Program Files\Keeplight\keeplight-cli.exe" mcp"#
+        );
+        assert_eq!(
+            gemini,
+            r#"gemini mcp add --scope user keeplight "C:\Program Files\Keeplight\keeplight-cli.exe" mcp"#
+        );
+        assert_eq!(codex, r#"codex mcp add keeplight -- "C:\Program Files\Keeplight\keeplight-cli.exe" mcp"#);
     }
 }

@@ -176,6 +176,35 @@ pub struct Mode {
     pub colors: Vec<Rgb>,
 }
 
+/// What a person calls each device, in order: "RAM stick 1", "RAM stick 2",
+/// "Keyboard". Devices of a kind are numbered only when there are several.
+pub fn display_names(devices: &[Device]) -> Vec<String> {
+    let total = |k: Kind| devices.iter().filter(|d| d.kind == k).count();
+    let mut seen: Vec<(Kind, usize)> = Vec::new();
+    devices
+        .iter()
+        .map(|d| {
+            let n = match seen.iter_mut().find(|(k, _)| *k == d.kind) {
+                Some((_, n)) => {
+                    *n += 1;
+                    *n
+                }
+                None => {
+                    seen.push((d.kind, 1));
+                    1
+                }
+            };
+            if total(d.kind) > 1 { format!("{} {n}", d.kind.label()) } else { d.kind.label().to_string() }
+        })
+        .collect()
+}
+
+/// A device's id for the command line and AI tools: its display name in
+/// lower case with dashes, such as "ram-stick-1".
+pub fn device_id(display_name: &str) -> String {
+    display_name.to_lowercase().split_whitespace().collect::<Vec<_>>().join("-")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Zone {
     pub name: String,
@@ -451,6 +480,13 @@ mod tests {
     fn truncated_payload_is_an_error() {
         let bytes = testing::encode_device(&testing::ram("SMBus"), 3);
         assert!(Device::parse(0, &bytes[..bytes.len() - 3], 3).is_err());
+    }
+
+    #[test]
+    fn devices_are_named_and_numbered_by_kind() {
+        let devices = [testing::ram("a"), testing::ram("b"), testing::keyboard(RED)];
+        assert_eq!(display_names(&devices), ["RAM stick 1", "RAM stick 2", "Keyboard"]);
+        assert_eq!(device_id("RAM stick 2"), "ram-stick-2");
     }
 
     #[test]

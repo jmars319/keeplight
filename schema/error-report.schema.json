@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErrorReport",
+  "description": "What every interface returns instead of a result when something fails:\nthe command line's `--json` output and an MCP tool's error result alike.",
+  "type": "object",
+  "properties": {
+    "error": {
+      "$ref": "#/$defs/ErrorBody"
+    },
+    "schemaVersion": {
+      "description": "The app's own schema version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "error"
+  ],
+  "$defs": {
+    "ErrorBody": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "A stable code, such as `plan.expired`.",
+          "type": "string"
+        },
+        "details": true,
+        "exitCode": {
+          "description": "The process exit code the command line uses for this error.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "hint": {
+          "description": "What to do about it.",
+          "type": "string"
+        },
+        "message": {
+          "description": "What went wrong and what was (not) changed, for people.",
+          "type": "string"
+        },
+        "retryable": {
+          "description": "Whether trying again later, without changing anything, can work.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "hint",
+        "retryable",
+        "exitCode"
+      ]
+    }
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Applied",
+  "description": "The result of a change: `apply_plan`, `keeplight-cli <action> --yes`, or a\nbutton in the window.",
+  "type": "object",
+  "properties": {
+    "change": {
+      "$ref": "#/$defs/Change"
+    },
+    "deviceName": {
+      "type": "string"
+    },
+    "held": {
+      "description": "For a put back: whether OpenRGB reads the device back as kept. That is\nOpenRGB's record, not proof the hardware shows it.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "journalProblem": {
+      "description": "Set when the journal couldn't be written. The change still happened.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "planId": {
+      "description": "Set when it came from a plan.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "result": {
+      "description": "What happened, in a sentence.",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "change",
+    "deviceName",
+    "steps",
+    "result"
+  ],
+  "$defs": {
+    "Action": {
+      "description": "What a change does to one device.",
+      "oneOf": [
+        {
+          "description": "Keep what the device shows now. Changes no light.",
+          "type": "string",
+          "const": "keep"
+        },
+        {
+          "description": "Keep a device whose every light is off, so it is turned back off after\nsleep. Changes no light now.",
+          "type": "string",
+          "const": "keepDark"
+        },
+        {
+          "description": "Send a kept device its kept setup.",
+          "type": "string",
+          "const": "putBack"
+        },
+        {
+          "description": "Stop keeping it; a device in Direct mode with an Onboard mode is handed\nback to that, so it isn't left dark.",
+          "type": "string",
+          "const": "stopKeeping"
+        },
+        {
+          "description": "Keep a device again as it was kept before you stopped keeping it, and\nsend it that setup.",
+          "type": "string",
+          "const": "keepAsBefore"
+        }
+      ]
+    },
+    "Change": {
+      "description": "One change the user asked for.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "device": {
+          "description": "The device's id (\"ram-stick-1\") or display name (\"RAM stick 1\"), as\nget_devices lists them.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "device"
+      ]
+    }
+  }
+}
