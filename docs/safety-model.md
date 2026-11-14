@@ -54,6 +54,8 @@ Tests against a fake server hold this, including `put_back_all_restores_every_ke
 
 ## Read from Windows
 
+- **The installed versions of OpenRGB and PawnIO,** from Windows' installed programs list (`...\CurrentVersion\Uninstall`, read only), and **whether the OpenRGB service runs**, from the service manager with query rights only. No admin rights. Shown in the window and in `diagnose`, against the versions Keeplight is tested with (`core::installs::TESTED`); only when OpenRGB is on this PC.
+
 - **The names of running programs**, every few seconds while the window is open, to guess what lights each device: a maker's lighting app (SteelSeries GG, Logitech G HUB, Armoury Crate, Corsair iCUE, Razer Synapse, EVGA Precision X1, NZXT CAM, Gigabyte RGB Fusion) or SignalRGB. Only the names are read, needing no admin rights; they stay in memory, are never written or sent, and only decide the "Lit by" line (`core::lit_by`).
 
 ## Processes

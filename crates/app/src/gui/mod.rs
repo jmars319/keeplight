@@ -57,6 +57,12 @@ pub fn run() -> i32 {
             let settings = keeplight_core::settings::Settings::load(&crate::platform::settings_path());
             v.tray_icon = settings.tray_icon;
             v.ai_changes = settings.ai_changes;
+            // OpenRGB and PawnIO against the tested versions, when OpenRGB is
+            // on this PC (read from Windows; cheap, no admin).
+            if keeplight_core::paths::is_this_pc(&address) {
+                let installs = keeplight_core::installs::read();
+                (v.installs, v.installs_warn) = (installs.summary(), installs.needs_attention());
+            }
             if weak.upgrade_in_event_loop(move |ui| apply(&ui, v)).is_err() {
                 return;
             }
@@ -339,6 +345,8 @@ fn apply(ui: &AppWindow, v: view::View) {
     g.set_heading(v.heading.into());
     g.set_message(v.message.into());
     g.set_summary(v.summary.into());
+    g.set_installs(v.installs.into());
+    g.set_installs_warn(v.installs_warn);
     g.set_can_set_everything(v.rows.iter().any(|r| r.can_color));
     let fresh: Vec<DeviceRow> = v
         .rows

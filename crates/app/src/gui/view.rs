@@ -35,6 +35,10 @@ pub struct View {
     pub tray_icon: bool,
     /// "Let AI tools make changes".
     pub ai_changes: bool,
+    /// OpenRGB and PawnIO against the tested versions, when OpenRGB is on
+    /// this PC; empty otherwise.
+    pub installs: String,
+    pub installs_warn: bool,
 }
 
 /// The sign-in switch's state and sentence. `current` is the registered
@@ -200,6 +204,8 @@ pub fn build(
         last_run: String::new(),
         tray_icon: false,
         ai_changes: false,
+        installs: String::new(),
+        installs_warn: false,
     }
 }
 
@@ -343,6 +349,8 @@ fn message(chip: &str, heading: &str, message: &str) -> View {
         last_run: String::new(),
         tray_icon: false,
         ai_changes: false,
+        installs: String::new(),
+        installs_warn: false,
     }
 }
 

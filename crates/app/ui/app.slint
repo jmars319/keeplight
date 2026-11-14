@@ -58,6 +58,9 @@ export global Ui {
     in property <string> heading: "Looking for OpenRGB";
     in property <string> message;
     in property <string> summary;
+    // OpenRGB and PawnIO against the versions Keeplight is tested with.
+    in property <string> installs;
+    in property <bool> installs-warn;
     in property <[DeviceRow]> devices;
     // The last action's result, or a problem with the saved setup.
     in property <string> notice;
@@ -481,6 +484,12 @@ export component AppWindow inherits Window {
                     text: Ui.summary;
                     font-size: 12px;
                     color: Theme.secondary-text;
+                }
+                if Ui.installs != "": Text {
+                    text: Ui.installs;
+                    font-size: 12px;
+                    color: Ui.installs-warn ? Theme.warning : Theme.secondary-text;
+                    wrap: word-wrap;
                 }
                 if Ui.notice != "": Text {
                     text: Ui.notice;
