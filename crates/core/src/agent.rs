@@ -785,7 +785,7 @@ impl Engine {
     /// why. From the command line each device is planned and applied, so it
     /// is journaled. AI tools plan one setColor per device instead, each with
     /// the user's request.
-    pub fn set_everything(&self, caller: &Caller, color: &str) -> Result<Everything> {
+    pub fn set_everything(&self, caller: &Caller, color: &str, request: Option<&str>) -> Result<Everything> {
         let devices = self.snapshot()?.devices;
         let names = display_names(&devices);
         let results = devices
@@ -797,11 +797,12 @@ impl Engine {
                 // so each device is journaled.
                 let result = match caller {
                     Caller::Window => self.change_now(caller, change),
-                    _ => self.plan(caller, change).and_then(|p| self.apply(caller, &p.plan_id, None)),
+                    _ => self.plan(caller, change).and_then(|p| self.apply(caller, &p.plan_id, request)),
                 };
-                // A bad color is wrong for every device: stop at the first.
+                // A bad color, or a refused caller, is the same for every device:
+                // stop at the first.
                 if let Err(e) = &result
-                    && e.code == kit::USAGE
+                    && [kit::USAGE, kit::AI_CHANGES_OFF, kit::AI_REQUEST_MISSING].contains(&e.code)
                 {
                     return Err(e.clone());
                 }
@@ -953,8 +954,12 @@ mod tests {
         Data(dir)
     }
 
+    /// An engine with "Let AI tools make changes" on, which the command line
+    /// needs too since kit 6; tests that check the switch turn it off.
     fn engine(server: &FakeServer, d: &Data) -> Engine {
-        Engine::new(Paths { data: d.0.clone() }, server.address.clone())
+        let e = Engine::new(Paths { data: d.0.clone() }, server.address.clone());
+        e.set_ai_changes(true).unwrap();
+        e
     }
 
     fn change(action: Action, device: &str) -> Change {
@@ -971,6 +976,7 @@ mod tests {
         let d = data("devices");
         let server = FakeServer::start(vec![testing::ram("SMBus 0x71"), testing::keyboard(RED)]);
         let e = engine(&server, &d);
+        e.set_ai_changes(false).unwrap();
         let r = e.devices().unwrap();
         assert_eq!(r.devices.len(), 2);
         assert_eq!(r.devices[0].id, "ram-stick");
@@ -995,10 +1001,10 @@ mod tests {
 
         let plan = e.plan(&Caller::Cli, change(Action::PutBack, "ram-stick")).unwrap();
         assert_eq!(plan.payload.steps, ["Send RAM stick its kept setup: Chase Fade in #ff0000."]);
-        let applied = e.apply(&Caller::Cli, &plan.plan_id, None).unwrap();
+        let applied = e.apply(&Caller::Cli, &plan.plan_id, Some("by hand")).unwrap();
         assert_eq!(applied.held, Some(true));
         assert_eq!(server.device(0).active_mode_name(), Some("Chase Fade"));
-        assert_eq!(e.apply(&Caller::Cli, &plan.plan_id, None).unwrap_err().code, kit::PLAN_NOT_FOUND);
+        assert_eq!(e.apply(&Caller::Cli, &plan.plan_id, Some("by hand")).unwrap_err().code, kit::PLAN_NOT_FOUND);
         let entries = journal::read(&d.0);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].caller, "cli");
@@ -1010,6 +1016,7 @@ mod tests {
         let d = data("ai");
         let server = FakeServer::start(vec![testing::ram("SMBus 0x71")]);
         let e = engine(&server, &d);
+        e.set_ai_changes(false).unwrap();
         let ai = Caller::Mcp { client: "test".into() };
         let plan = e.plan(&ai, change(Action::Keep, "RAM stick")).unwrap();
         assert_eq!(e.apply(&ai, &plan.plan_id, Some("keep it")).unwrap_err().code, kit::AI_CHANGES_OFF);
@@ -1021,6 +1028,26 @@ mod tests {
         assert_eq!(e.change_now(&ai, change(Action::Keep, "RAM stick")).unwrap_err().code, kit::AI_REQUEST_MISSING);
     }
 
+    /// Since kit 6 the command line passes the same gate: any AI tool with a
+    /// shell can run it. Planning stays open; the window is never gated.
+    #[test]
+    fn the_command_line_needs_the_switch_and_a_request_too() {
+        let d = data("cli-gate");
+        let server = FakeServer::start(vec![testing::ram("SMBus 0x71")]);
+        let e = engine(&server, &d);
+        e.set_ai_changes(false).unwrap();
+        let plan = e.plan(&Caller::Cli, change(Action::Keep, "RAM stick")).unwrap();
+        assert_eq!(e.apply(&Caller::Cli, &plan.plan_id, Some("keep it")).unwrap_err().code, kit::AI_CHANGES_OFF);
+        let refused = e.set_everything(&Caller::Cli, "#00ff40", Some("green")).unwrap_err();
+        assert_eq!(refused.code, kit::AI_CHANGES_OFF, "said once, not per device");
+        e.set_ai_changes(true).unwrap();
+        assert_eq!(e.apply(&Caller::Cli, &plan.plan_id, None).unwrap_err().code, kit::AI_REQUEST_MISSING);
+        e.apply(&Caller::Cli, &plan.plan_id, Some("keep the RAM")).unwrap();
+        assert_eq!(journal::read(&d.0)[0].request.as_deref(), Some("keep the RAM"));
+        e.set_ai_changes(false).unwrap();
+        e.change_now(&Caller::Window, change(Action::PutBack, "RAM stick")).unwrap();
+    }
+
     #[test]
     fn a_device_that_changed_since_the_plan_is_refused() {
         let d = data("changed");
@@ -1028,7 +1055,7 @@ mod tests {
         let e = engine(&server, &d);
         let plan = e.plan(&Caller::Cli, change(Action::Keep, "RAM stick")).unwrap();
         server.state.lock().unwrap().devices[0].colors[0] = crate::device::Rgb { r: 0, g: 0, b: 255 };
-        assert_eq!(e.apply(&Caller::Cli, &plan.plan_id, None).unwrap_err().code, kit::CHANGED_MEANWHILE);
+        assert_eq!(e.apply(&Caller::Cli, &plan.plan_id, Some("by hand")).unwrap_err().code, kit::CHANGED_MEANWHILE);
         assert!(Setup::load(&e.paths.setup()).unwrap().devices.is_empty());
     }
 
@@ -1042,7 +1069,7 @@ mod tests {
         assert_eq!(plan.payload.location, "SMBus 0x71");
         // OpenRGB now lists them the other way round.
         server.state.lock().unwrap().devices.reverse();
-        e.apply(&Caller::Cli, &plan.plan_id, None).unwrap();
+        e.apply(&Caller::Cli, &plan.plan_id, Some("by hand")).unwrap();
         let setup = Setup::load(&e.paths.setup()).unwrap();
         assert_eq!(setup.devices.len(), 1);
         assert_eq!(setup.devices[0].location, "SMBus 0x71", "the planned stick, not the one now first");
@@ -1058,7 +1085,9 @@ mod tests {
         // checking and writing around it.
         let held = keep::SetupLock::acquire(&e.paths.setup()).unwrap();
         let (paths, address, id) = (e.paths.clone(), e.address.clone(), plan.plan_id.clone());
-        let waiter = std::thread::spawn(move || Engine::new(paths, address).apply(&Caller::Cli, &id, None).map(|_| ()));
+        let waiter = std::thread::spawn(move || {
+            Engine::new(paths, address).apply(&Caller::Cli, &id, Some("by hand")).map(|_| ())
+        });
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert!(!waiter.is_finished(), "apply waits for the lock");
         drop(held);
@@ -1077,7 +1106,7 @@ mod tests {
                 "Set RAM stick to Chase Fade in #0050ff and keep it. Keep it as before goes back to what it shows now (Chase Fade)."
             ]
         );
-        let applied = e.apply(&Caller::Cli, &plan.plan_id, None).unwrap();
+        let applied = e.apply(&Caller::Cli, &plan.plan_id, Some("by hand")).unwrap();
         assert_eq!(applied.held, Some(true));
         assert_eq!(server.device(0).colors[0], crate::device::Rgb { r: 0, g: 0x50, b: 0xff });
         let r = e.devices().unwrap();
@@ -1108,7 +1137,7 @@ mod tests {
             ["Set Motherboard's Addressable Header 1 to #0050ff (Direct), the rest as it is, and keep it. Keep it as \
               before goes back to what it shows now (Static)."]
         );
-        let applied = e.apply(&Caller::Cli, &plan.plan_id, None).unwrap();
+        let applied = e.apply(&Caller::Cli, &plan.plan_id, Some("by hand")).unwrap();
         assert_eq!(applied.result, "Set and kept Motherboard's Addressable Header 1 in #0050ff.");
         let blue = crate::device::Rgb { r: 0, g: 0x50, b: 0xff };
         assert_eq!(server.device(0).colors, vec![RED, RED, blue, blue]);
@@ -1124,7 +1153,7 @@ mod tests {
         fixed.active_mode = Some(0);
         let server = FakeServer::start(vec![testing::ram("SMBus 0x71"), fixed, testing::board()]);
         let e = engine(&server, &d);
-        let r = e.set_everything(&Caller::Cli, "#00ff40").unwrap();
+        let r = e.set_everything(&Caller::Cli, "#00ff40", Some("make it green")).unwrap();
         assert_eq!((r.set(), r.devices.len()), (2, 3));
         assert_eq!(r.devices[1].name, "RAM stick 2");
         assert!(r.devices[1].problem.as_deref().unwrap().contains("none of its modes takes a color"));
@@ -1137,7 +1166,7 @@ mod tests {
         e.change_now(&Caller::Window, change(Action::KeepAsBefore, "motherboard")).unwrap();
         assert_eq!(server.device(2).active().unwrap().colors, vec![RED]);
         // A color that can't be read stops at once and changes nothing.
-        assert_eq!(e.set_everything(&Caller::Window, "green").unwrap_err().code, kit::USAGE);
+        assert_eq!(e.set_everything(&Caller::Window, "green", None).unwrap_err().code, kit::USAGE);
     }
 
     #[test]

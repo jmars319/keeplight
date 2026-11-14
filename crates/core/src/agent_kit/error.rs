@@ -115,7 +115,7 @@ pub mod codes {
     );
     pub const AI_CHANGES_OFF: ErrorCode = ErrorCode::new(
         "ai.changes_off",
-        "AI tools may read and plan, but changes from them are turned off in the app's Settings.",
+        "AI tools and the command line may read and plan, but their changes are turned off in the app's Settings.",
         "Tell the user. They can turn on \"Let AI tools make changes\" in the app's Settings, or make the change themselves.",
         false,
         Exit::Refused,
@@ -123,7 +123,7 @@ pub mod codes {
     pub const AI_REQUEST_MISSING: ErrorCode = ErrorCode::new(
         "ai.request_missing",
         "An AI tool asked for a change without the user's request for it.",
-        "Pass the user's own words asking for this change as `request`. AI tools change nothing on their own initiative.",
+        "Pass the user's own words asking for this change as `request` (MCP) or `--request` (command line). AI tools change nothing on their own initiative.",
         false,
         Exit::Usage,
     );

@@ -77,7 +77,7 @@ mod tests {
         let ai = authorize_write(&Caller::Mcp { client: "codex".into() }, true, Some("turn off every mod")).unwrap();
         append(&tmp.0, &ai, "game-a", "0123456789abcdef", &["mod B off"], None).unwrap();
         let failed = AgentError::new(codes::SAVE_FAILED, "disk full");
-        let cli = authorize_write(&Caller::Cli, false, None).unwrap();
+        let cli = authorize_write(&Caller::Cli, true, Some("turn on b")).unwrap();
         append(&tmp.0, &cli, "game-a", "fedcba9876543210", &["x", "y"], Some(&failed)).unwrap();
         std::fs::OpenOptions::new()
             .append(true)

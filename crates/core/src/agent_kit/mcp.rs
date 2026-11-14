@@ -29,7 +29,9 @@ use rmcp::{ErrorData as McpError, Peer, RoleServer, ServerHandler, ServiceExt};
 use serde::Serialize;
 
 use super::error::{ErrorCode, ErrorCodeList, Result};
+use super::events::{EventLog, LogEvent, LogLevel};
 use super::gate::Caller;
+use super::now_ms;
 
 /// The rules every app's server tells the model, after its own description.
 pub const SHARED_RULES: &str = "\
@@ -71,6 +73,60 @@ pub fn error_codes(schema_version: u32, all: &[ErrorCode]) -> std::result::Resul
 pub fn caller(peer: &Peer<RoleServer>) -> Caller {
     let client = peer.peer_info().map(|i| i.client_info.name.clone()).filter(|n| !n.is_empty());
     Caller::Mcp { client: client.unwrap_or_else(|| "unknown".into()) }
+}
+
+/// The event name [`record_client`] logs.
+pub const CLIENT_SEEN: &str = "mcp.client_seen";
+
+/// Records the AI app that just connected (its `clientInfo` name and
+/// version) in the event log, so Settings can show "Last used by Claude Code
+/// 2.1.325 at 22:51": proof from the AI app itself, which costs no tokens.
+/// Call it from the server's `on_initialized`:
+///
+/// ```ignore
+/// async fn on_initialized(&self, context: rmcp::service::NotificationContext<RoleServer>) {
+///     agent_kit::mcp::record_client(&context.peer, &self.events);
+/// }
+/// ```
+pub fn record_client(peer: &Peer<RoleServer>, log: &EventLog) {
+    let (name, version) =
+        peer.peer_info().map(|i| (i.client_info.name.clone(), i.client_info.version.clone())).unwrap_or_default();
+    let caller = Caller::Mcp { client: if name.is_empty() { "unknown".into() } else { name } };
+    let _ = log.append(&client_event(&caller, &version, now_ms()));
+}
+
+fn client_event(caller: &Caller, version: &str, ts_ms: u64) -> LogEvent {
+    let version: String =
+        version.chars().filter(|c| c.is_ascii_alphanumeric() || ".-+".contains(*c)).take(32).collect();
+    LogEvent {
+        ts_ms,
+        level: LogLevel::Info,
+        event: CLIENT_SEEN.into(),
+        caller: caller.label(),
+        target: None,
+        subject: None,
+        plan: None,
+        message: version,
+        error: None,
+    }
+}
+
+/// The AI app that last connected, as [`record_client`] logged it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastClient {
+    /// The client's own name, such as `claude-code`.
+    pub client: String,
+    pub version: String,
+    pub ts_ms: u64,
+}
+
+/// The newest [`record_client`] entry among the last `scan` events.
+pub fn last_client(log: &EventLog, scan: usize) -> Option<LastClient> {
+    log.recent(scan).into_iter().rev().find(|e| e.event == CLIENT_SEEN).map(|e| LastClient {
+        client: e.caller.strip_prefix("mcp:").unwrap_or(&e.caller).to_string(),
+        version: e.message,
+        ts_ms: e.ts_ms,
+    })
 }
 
 /// The server's identity, its tools and its instructions.
@@ -141,5 +197,17 @@ mod tests {
         let text = serde_json::to_string(&err.content).unwrap();
         assert!(text.contains("ai.changes_off") && text.contains("schemaVersion"));
         assert!(instructions("About.\n").starts_with("About.\n\nRules:"));
+    }
+
+    #[test]
+    fn the_last_client_seen_is_read_back_from_the_event_log() {
+        let tmp = super::super::TestDir::new("last-client");
+        let log = EventLog::new(tmp.0.join("logs"), "app");
+        assert_eq!(last_client(&log, 50), None);
+        let claude = Caller::Mcp { client: "claude-code".into() };
+        log.append(&client_event(&claude, "2.1.325", 1_000)).unwrap();
+        log.append(&client_event(&Caller::Mcp { client: "codex".into() }, "0.1\n<x>", 2_000)).unwrap();
+        let last = last_client(&log, 50).unwrap();
+        assert_eq!((last.client.as_str(), last.version.as_str(), last.ts_ms), ("codex", "0.1x", 2_000));
     }
 }
