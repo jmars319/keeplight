@@ -268,7 +268,8 @@ fn rows(devices: &[Device], setup: Option<&Setup>, running: &[String]) -> Vec<Ro
                 can_keep,
                 dark,
                 has_before: before.is_some(),
-                can_color: setup.is_some() && Kept::colored(d, Rgb { r: 255, g: 255, b: 255 }).is_ok(),
+                can_color: setup.is_some_and(|s| keeplight_core::keep::undo_for(s, d).is_ok())
+                    && Kept::colored(d, Rgb { r: 255, g: 255, b: 255 }).is_ok(),
             }
         })
         .collect()

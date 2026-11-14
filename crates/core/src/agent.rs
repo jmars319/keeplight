@@ -71,8 +71,10 @@ pub mod codes {
     );
     pub const CANT_COLOR: ErrorCode = ErrorCode::new(
         "device.cant_color",
-        "That device can't be set to that color: none of its modes takes a color, or the color is black.",
-        "Pick another device, or a color other than #000000 (use keepDark to keep a device dark).",
+        "That device can't be set to that color: none of its modes takes a color, the color is black, or OpenRGB \
+         doesn't say which mode it's in, so the change couldn't be undone.",
+        "Pick another device, or a color other than #000000 (use keepDark to keep a device dark). For an unknown \
+         mode, set the device in OpenRGB and keep it first.",
         false,
         Exit::Refused,
     );
@@ -347,7 +349,7 @@ pub fn from_action(e: ActionError) -> AgentError {
     match e {
         ActionError::Sdk(e) => from_sdk(e),
         ActionError::Setup(e) => from_setup(e),
-        ActionError::Keep(e @ (KeepError::NoColorMode | KeepError::Black)) => {
+        ActionError::Keep(e @ (KeepError::NoColorMode | KeepError::Black | KeepError::NoUndo)) => {
             AgentError::new(codes::CANT_COLOR, format!("Keeplight can't set that color: {e}"))
         }
         ActionError::Keep(e) => AgentError::new(codes::CANT_KEEP, format!("Keeplight can't keep it: {e}")),
@@ -439,12 +441,14 @@ pub fn check(change: &Change, devices: &[Device], setup: &Setup) -> Result<Check
         }
         Action::SetColor => {
             let color = parse_color(change.color.as_deref())?;
-            let k = Kept::colored(device, color).map_err(|e| {
+            let cant = |e: KeepError| {
                 AgentError::new(
                     codes::CANT_COLOR,
                     format!("{name} can't be set to {}: {e} Nothing was changed.", color.hex()),
                 )
-            })?;
+            };
+            let k = Kept::colored(device, color).map_err(cant)?;
+            keep::undo_for(setup, device).map_err(cant)?;
             let was = match kept {
                 Some(old) => describe(old),
                 None => format!("what it shows now ({})", device.active_mode_name().unwrap_or("its current mode")),
@@ -976,6 +980,11 @@ mod tests {
         assert_eq!(code(None), kit::USAGE);
         assert_eq!(code(Some("blue")), kit::USAGE);
         assert_eq!(code(Some("#000000")), codes::CANT_COLOR);
+        let mut unknown = testing::ram("a");
+        unknown.active_mode = None;
+        let change = Change::set_color("ram-stick", "#0050ff");
+        let e = check(&change, &[unknown], &setup).unwrap_err();
+        assert_eq!(e.code, codes::CANT_COLOR, "no undo, so no plan promises one");
     }
 
     #[test]

@@ -60,6 +60,18 @@ pub enum KeepError {
     NoColorMode,
     #[error("black turns every light off. To keep it dark, use Keep it dark instead.")]
     Black,
+    #[error("OpenRGB doesn't say which mode it's in now, so Keep it as before couldn't bring it back afterwards.")]
+    NoUndo,
+}
+
+/// What a new color on `device` replaces, for "Keep it as before": what is
+/// kept for it, or what it shows when it isn't kept. A change that couldn't
+/// be undone is refused.
+pub fn undo_for(setup: &Setup, device: &Device) -> Result<Kept, KeepError> {
+    match setup.find(device) {
+        Some(k) => Ok(k.clone()),
+        None => Kept::capture_dark(device).map_err(|_| KeepError::NoUndo),
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -528,8 +540,8 @@ pub fn set_color_locked(
     let mut client = Client::connect(address)?;
     let device = find_device(&mut client, name, location)?;
     let kept = Kept::colored(&device, color)?;
-    let previous = setup.find(&device).cloned().or_else(|| Kept::capture_dark(&device).ok());
-    setup.keep_remembering(kept.clone(), previous);
+    let previous = undo_for(&setup, &device)?;
+    setup.keep_remembering(kept.clone(), Some(previous));
     setup.save(setup_path)?;
     let outcome = put_back(&mut client, &kept, &device)?;
     Ok((kept, outcome))
@@ -1011,6 +1023,24 @@ mod tests {
         assert_eq!(server.device(0).colors, vec![BLUE; 6]);
         let setup = Setup::load(&path).unwrap();
         assert_eq!(setup.before[0].mode.name, "Onboard", "Keep it as before hands it back to its own lighting");
+    }
+
+    #[test]
+    fn a_new_color_is_refused_when_it_couldnt_be_undone() {
+        let path = temp_path("set-color-no-undo");
+        let mut unknown = testing::ram("SMBus 0x71");
+        unknown.active_mode = None;
+        // It can take a color (Direct), but what it shows now can't be kept.
+        assert!(Kept::colored(&unknown, BLUE).is_ok());
+        assert_eq!(undo_for(&Setup::default(), &unknown), Err(KeepError::NoUndo));
+        let server = FakeServer::start(vec![unknown]);
+        let sent_before = server.seen_ids().iter().filter(|&&id| id == packet::UPDATE_MODE).count();
+        assert!(matches!(
+            set_color(&server.address, &path, "ENE DRAM", "SMBus 0x71", BLUE),
+            Err(ActionError::Keep(KeepError::NoUndo))
+        ));
+        assert_eq!(server.seen_ids().iter().filter(|&&id| id == packet::UPDATE_MODE).count(), sent_before);
+        assert!(Setup::load(&path).unwrap().devices.is_empty(), "nothing saved");
     }
 
     #[test]
