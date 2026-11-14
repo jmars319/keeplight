@@ -67,6 +67,13 @@ export global Ui {
     in property <string> offer-label;
     in property <string> offer-text;
     callback install(string);
+    // "Tell me when a new Keeplight is out", and what it found: the sentence
+    // and the installer's link (empty when nothing is newer).
+    in-out property <bool> update-check;
+    callback set-update-check(bool);
+    in property <string> update-text;
+    in property <string> update-url;
+    callback open-update(string);
     in property <[DeviceRow]> devices;
     // The last action's result, or a problem with the saved setup.
     in property <string> notice;
@@ -493,6 +500,22 @@ export component AppWindow inherits Window {
                     font-size: 12px;
                     color: Theme.secondary-text;
                 }
+                if Ui.update-text != "": HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: Ui.update-text;
+                        font-size: 12px;
+                        color: Theme.ready;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: "Download";
+                        accessible-label: "Download the newer Keeplight";
+                        clicked => { Ui.open-update(Ui.update-url); }
+                    }
+                }
                 if Ui.installs != "": Text {
                     text: Ui.installs;
                     font-size: 12px;
@@ -604,6 +627,11 @@ export component AppWindow inherits Window {
                         text: "Show the keeper's icon in the notification area";
                         checked <=> Ui.tray-icon;
                         toggled => { Ui.set-tray-icon(self.checked); }
+                    }
+                    Switch {
+                        text: "Tell me when a new Keeplight is out";
+                        checked <=> Ui.update-check;
+                        toggled => { Ui.set-update-check(self.checked); }
                     }
                     Switch {
                         text: "Let AI tools make changes";

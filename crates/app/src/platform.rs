@@ -180,6 +180,20 @@ pub fn start_keeper() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Opens an https link in the default browser, which downloads it. Used only
+/// for the installer of a newer Keeplight named by the release feed.
+pub fn open_in_browser(url: &str) {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{HSTRING, PCWSTR, w};
+    if !url.starts_with("https://") {
+        return;
+    }
+    unsafe {
+        ShellExecuteW(None, w!("open"), &HSTRING::from(url), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+    }
+}
+
 /// The per-user startup entry that runs the keeper at sign-in:
 /// `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `Keeplight`.
 pub mod startup {

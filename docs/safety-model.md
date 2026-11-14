@@ -62,6 +62,12 @@ The one time Keeplight uses the internet, and the one time it asks for admin rig
 - **Downloaded by Windows' own `curl.exe`** (`%SystemRoot%\System32`, by full path), https only, redirects https only, and at most the pinned size, into `%LOCALAPPDATA%\Keeplight\downloads`. A file that differs in size or hash is deleted and nothing runs. The file is checked again just before it runs.
 - **Run with Windows' admin prompt.** The official installer, with its own window (`msiexec /i` for OpenRGB's MSI, PawnIO's setup as it is). Declining the prompt or cancelling installs nothing, and the window says so. The OpenRGB MSI installs OpenRGB's service; Keeplight's keeper puts kept devices back when OpenRGB comes back.
 
+## Asking whether a newer Keeplight is out
+
+- When the window opens, and once a day while it stays open, it asks the shared release feed for `keeplight-latest/release.json` (`core::update::FEED`, on github.com) with Windows' `curl.exe`: https only, at most 64 KB. Nothing about you or this PC is sent beyond the request itself. The keeper never asks.
+- A newer version is only shown, with a **Download** button that opens its installer link in your browser. Keeplight never downloads or installs itself. A manifest whose installer isn't in the feed's own Keeplight releases is ignored.
+- **Tell me when a new Keeplight is out** (on by default) turns the check off; it's saved as `noUpdateCheck` in `settings.json`.
+
 ## Read from Windows
 
 - **The installed versions of OpenRGB and PawnIO,** from Windows' installed programs list (`...\CurrentVersion\Uninstall`, read only), and **whether the OpenRGB service runs**, from the service manager with query rights only. No admin rights. Shown in the window and in `diagnose`, against the versions Keeplight is tested with (`core::installs::TESTED`); only when OpenRGB is on this PC.
@@ -82,7 +88,7 @@ The one time Keeplight uses the internet, and the one time it asks for admin rig
 
 ## Not done, by design
 
-- No network access beyond the SDK connection above, except a pinned installer you asked for (see "Installing OpenRGB and PawnIO"), fetched by Windows' own `curl.exe`. CI's dependency policy still bans HTTP and TLS crates.
+- No network access beyond the SDK connection above, except a pinned installer you asked for (see "Installing OpenRGB and PawnIO") and the daily update check (see "Asking whether a newer Keeplight is out"), both by Windows' own `curl.exe`. CI's dependency policy still bans HTTP and TLS crates.
 - No telemetry or accounts.
 - No admin rights. The app runs as the signed-in user. The only admin prompt is Windows' own, for an installer you chose to run.
 - No direct hardware access. Every read and write goes through OpenRGB.
