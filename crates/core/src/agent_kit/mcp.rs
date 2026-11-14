@@ -5,12 +5,26 @@
 //! lives behind its own loopback server, the MCP process calls that server
 //! like any other client, and the server keeps its guard and the AI gate.
 //!
+//! The runtime [`serve_stdio`] builds has timers and no I/O driver, so the
+//! server can't open a socket by construction, and an async HTTP client
+//! (reqwest, hyper) panics with "IO is disabled" on it. To call the app's own
+//! loopback server, either use a blocking `std::net::TcpStream` request inside
+//! `tokio::task::spawn_blocking` (Atlas's way, which keeps the kit's tokio
+//! features), or, in an app whose tokio already has `net`, build a runtime
+//! with `enable_all()` and pass it to [`serve_on_runtime`].
+//!
+//! rmcp's `#[tool_router]` and `#[tool_handler]` expand to a bare
+//! `Result<_, ErrorData>`, so the module that holds them must not import the
+//! kit's one-parameter `Result` alias: write `agent_kit::error::Result<T>` in
+//! full there.
+//!
 //! The app writes its own tool router (`#[tool_router]`, one `#[tool]` per
 //! operation, read tools annotated read-only, write tools destructive) and
 //! uses these helpers for what every app does the same way. The kit's test
 //! harness (`tests/mcp.rs` beside the reference copy) is a complete example.
 
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::transport::IntoTransport;
 use rmcp::{ErrorData as McpError, Peer, RoleServer, ServerHandler, ServiceExt};
 use serde::Serialize;
 
@@ -69,12 +83,44 @@ pub fn server_config(name: &str, version: &str, instructions: String) -> ServerC
 /// Serves MCP on stdin and stdout until the client disconnects. The only
 /// async runtime in the app, kept to this edge.
 pub fn serve_stdio<S: ServerHandler>(server: S) -> std::result::Result<(), String> {
+    serve_on(server, rmcp::transport::stdio())
+}
+
+/// Serves MCP on `transport` until the client disconnects, on a
+/// single-threaded runtime built here. [`serve_stdio`] is this on stdin and
+/// stdout; tests pass an in-memory pipe.
+pub fn serve_on<S, T, E, A>(server: S, transport: T) -> std::result::Result<(), String>
+where
+    S: ServerHandler,
+    T: IntoTransport<RoleServer, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    // Timers on: rmcp uses one while it shuts down, and without them every
+    // client disconnect panics (a Windows release build exits 0xC0000409).
+    // No I/O driver: the server opens no socket.
     let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
         .build()
         .map_err(|e| format!("Couldn't start the MCP server: {e}"))?;
+    serve_on_runtime(server, transport, &runtime)
+}
+
+/// Serves MCP on `transport` until the client disconnects, on a runtime the
+/// app built. For an app whose tool handlers need the runtime's I/O driver
+/// (an async client for its own loopback server); the runtime must have
+/// timers on (`enable_time()` or `enable_all()`).
+pub fn serve_on_runtime<S, T, E, A>(
+    server: S,
+    transport: T,
+    runtime: &tokio::runtime::Runtime,
+) -> std::result::Result<(), String>
+where
+    S: ServerHandler,
+    T: IntoTransport<RoleServer, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
     runtime.block_on(async {
-        let service =
-            server.serve(rmcp::transport::stdio()).await.map_err(|e| format!("The MCP client didn't connect: {e}"))?;
+        let service = server.serve(transport).await.map_err(|e| format!("The MCP client didn't connect: {e}"))?;
         service.waiting().await.map(|_| ()).map_err(|e| format!("The MCP server stopped: {e}"))
     })
 }

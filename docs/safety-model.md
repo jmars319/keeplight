@@ -49,7 +49,7 @@ Tests against a fake server hold this, including `put_back_all_restores_every_ke
 
 - **Plan, then apply.** Every change from the command line or an AI tool is planned first by the same check that applies it (`agent::check`). A plan records its steps, the setup file's SHA-256 and the device's current mode and colors, expires after 10 minutes and is applied once. Applying refuses when the setup or the device changed since, or when the check now gives different steps.
 - **AI changes are off by default.** "Let AI tools make changes" is stored as `aiChanges` in `settings.json` and turned on only from the window. While off, `apply_plan` is refused with `ai.changes_off`; while on, it still needs the user's request in their own words. The command line needs `--yes` for any change.
-- **A record.** Every applied plan goes to `journal.jsonl` (time, caller, plan, request, steps), and every change and failure from any front end goes to `logs/keeplight-YYYY-MM-DD.jsonl` (UTC, kept 14 days), with who made it: `gui`, `cli`, `mcp:<app>` or `keeper`.
+- **A record.** Every applied plan goes to `journal.jsonl` (time, caller, plan, request, steps), and every change and failure from any front end goes to `logs/keeplight-YYYY-MM-DD.jsonl` (UTC, kept 14 days), with who made it: `gui`, `cli`, `mcp:<app>` or `background:keeper`.
 - **No network.** The MCP server speaks only over the stdin and stdout of the app that started it. It opens no port.
 
 ## Read from Windows

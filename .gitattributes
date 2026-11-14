@@ -2,3 +2,6 @@
 *.ico binary
 *.png binary
 *.ttf binary
+# The agent kit's copy must stay byte-identical to its record (agent-kit.sha256).
+crates/core/src/agent_kit/** text eol=lf
+crates/core/agent-kit.sha256 text eol=lf

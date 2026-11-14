@@ -18,15 +18,21 @@ pub enum Caller {
     Cli,
     /// An AI tool through the app's MCP server, by the name its client gave.
     Mcp { client: String },
+    /// The app's own background work, such as a keeper or a scheduled job,
+    /// by a short name the app chooses (`keeper`). It acts on the owner's
+    /// settings, never on a model's request.
+    Background { name: String },
 }
 
 impl Caller {
-    /// `gui`, `cli` or `mcp:<client>`, as logs and the journal record it.
+    /// `gui`, `cli`, `mcp:<client>` or `background:<name>`, as logs and the
+    /// journal record it.
     pub fn label(&self) -> String {
         match self {
             Caller::Window => "gui".into(),
             Caller::Cli => "cli".into(),
             Caller::Mcp { client } => format!("mcp:{}", clean_client(client)),
+            Caller::Background { name } => format!("background:{}", clean_client(name)),
         }
     }
 
@@ -67,8 +73,8 @@ impl Authorized {
 /// Checks that `caller` may make a change, before anything is read or
 /// claimed.
 ///
-/// - The window and the command line pass (the command line's own `--yes`
-///   rule is the app's to check).
+/// - The window, the command line and the app's own background work pass
+///   (the command line's own `--yes` rule is the app's to check).
 /// - An AI tool is refused with `ai.changes_off` while the switch is off, and
 ///   with `ai.request_missing` without a request.
 pub fn authorize_write(caller: &Caller, ai_changes_on: bool, request: Option<&str>) -> Result<Authorized> {
@@ -103,6 +109,9 @@ mod tests {
         assert_eq!(authorize_write(&ai, true, Some(" turn it off ")).unwrap().request(), Some("turn it off"));
         assert_eq!(authorize_write(&Caller::Cli, false, None).unwrap().request(), None);
         assert_eq!(authorize_write(&Caller::Window, false, None).unwrap().caller(), &Caller::Window);
+        let keeper = Caller::Background { name: "keeper".into() };
+        assert!(!keeper.is_ai());
+        assert_eq!(authorize_write(&keeper, false, None).unwrap().caller().label(), "background:keeper");
     }
 
     #[test]
