@@ -114,12 +114,24 @@ pub struct Row {
     pub has_before: bool,
     /// It runs a lighting mode of its own, so its colors are unknown.
     pub own_lighting: bool,
+    /// What probably lights it, after "Lit by: ".
+    pub lit_by: String,
+    /// Another running app may fight Keeplight over it.
+    pub lit_by_warn: bool,
 }
 
 /// The saved setup as the window sees it: read, or the reason it couldn't be.
 pub type SetupView = Result<Setup, String>;
 
-pub fn build(result: &Result<Snapshot, String>, setup: &SetupView, address: &str, notice: Option<&Notice>) -> View {
+/// `running` holds the names of running programs, for guessing what lights
+/// each device (`keeplight_core::lit_by`).
+pub fn build(
+    result: &Result<Snapshot, String>,
+    setup: &SetupView,
+    address: &str,
+    notice: Option<&Notice>,
+    running: &[String],
+) -> View {
     let (notice, notice_warn) = match (setup, notice) {
         (Err(reason), _) => (format!("Your saved setup can't be used, so Keep and Put back are off. {reason}"), true),
         (Ok(_), Some(n)) => (n.text.clone(), n.warn),
@@ -167,7 +179,7 @@ pub fn build(result: &Result<Snapshot, String>, setup: &SetupView, address: &str
         summary,
         notice,
         notice_warn,
-        rows: rows(&snapshot.devices, kept),
+        rows: rows(&snapshot.devices, kept, running),
         sign_in: false,
         sign_in_note: String::new(),
         last_run: String::new(),
@@ -182,7 +194,7 @@ pub struct Notice {
     pub warn: bool,
 }
 
-fn rows(devices: &[Device], setup: Option<&Setup>) -> Vec<Row> {
+fn rows(devices: &[Device], setup: Option<&Setup>, running: &[String]) -> Vec<Row> {
     let mut totals: HashMap<Kind, usize> = HashMap::new();
     for d in devices {
         *totals.entry(d.kind).or_default() += 1;
@@ -213,6 +225,7 @@ fn rows(devices: &[Device], setup: Option<&Setup>) -> Vec<Row> {
             let (status, status_text) = status(d, setup.and_then(|s| s.find(d)));
             // What it was kept as before you stopped keeping it, if anything.
             let before = if status == Status::NotKept { setup.and_then(|s| s.find_before(d)) } else { None };
+            let lit = keeplight_core::lit_by::lit_by(d, setup.is_some_and(|s| s.find(d).is_some()), running);
             let capture = Kept::capture(d);
             let dark = is_dark(d);
             // A dark device can be kept too, but the row asks first.
@@ -226,10 +239,11 @@ fn rows(devices: &[Device], setup: Option<&Setup>) -> Vec<Row> {
                 (Err(e), Status::NotKept) => e.to_string(),
                 _ => status_text,
             };
-            // Its own lighting first: then the colors OpenRGB reports are stale.
+            // On its own lighting, the colors OpenRGB reports are stale. The
+            // "Lit by" line names the mode, so this only says what it means.
             let status_text = match (d.own_lighting(), status) {
-                (Some(mode), Status::NotKept) if status_text.is_empty() => {
-                    format!("On its own lighting ({mode}). Keeplight can't see its colors.")
+                (Some(_), Status::NotKept) if status_text.is_empty() => {
+                    "Keeplight can't see the colors it shows.".to_string()
                 }
                 _ => status_text,
             };
@@ -248,6 +262,8 @@ fn rows(devices: &[Device], setup: Option<&Setup>) -> Vec<Row> {
                 note,
                 swatch: d.lit_color().map(|c| (c.r, c.g, c.b)),
                 own_lighting: d.own_lighting().is_some(),
+                lit_by: lit.describe(),
+                lit_by_warn: lit.is_conflict(),
                 status,
                 status_text,
                 can_keep,
@@ -338,7 +354,7 @@ mod tests {
 
     #[test]
     fn unreachable_server_explains_where_it_looked() {
-        let v = build(&Err("refused".into()), &empty(), "127.0.0.1:6742", None);
+        let v = build(&Err("refused".into()), &empty(), "127.0.0.1:6742", None, &[]);
         assert_eq!(v.screen, Screen::Message);
         assert!(v.chip_warn);
         assert!(v.message.contains("127.0.0.1:6742"));
@@ -347,7 +363,7 @@ mod tests {
 
     #[test]
     fn no_devices_is_its_own_message() {
-        let v = build(&snap(vec![]), &empty(), "a", None);
+        let v = build(&snap(vec![]), &empty(), "a", None, &[]);
         assert_eq!(v.screen, Screen::Message);
         assert!(v.heading.contains("hasn't found any lights"));
     }
@@ -360,7 +376,7 @@ mod tests {
             device(Kind::GraphicsCard, "EVGA RTX", "Direct", vec![RED; 4], true),
             device(Kind::Keyboard, "Apex", "Direct", vec![Rgb::default(); 2], false),
         ]);
-        let v = build(&s, &empty(), "a", None);
+        let v = build(&s, &empty(), "a", None, &[]);
         assert_eq!(v.screen, Screen::Devices);
         assert_eq!(v.summary, "4 devices · 22 lights");
         let names: Vec<_> = v.rows.iter().map(|r| r.name.as_str()).collect();
@@ -376,7 +392,7 @@ mod tests {
     fn mostly_dark_device_with_some_lit_keys_is_not_off() {
         let mut colors = vec![Rgb::default(); 100];
         colors[0] = RED;
-        let v = build(&snap(vec![device(Kind::Keyboard, "Apex", "Direct", colors, false)]), &empty(), "a", None);
+        let v = build(&snap(vec![device(Kind::Keyboard, "Apex", "Direct", colors, false)]), &empty(), "a", None, &[]);
         assert_eq!(v.rows[0].swatch, Some((255, 0, 0)));
         assert!(v.rows[0].can_keep);
     }
@@ -388,7 +404,7 @@ mod tests {
             Zone { name: "Board".into(), led_count: 4, matrix: None },
             Zone { name: "Header 1".into(), led_count: 2, matrix: None },
         ];
-        let v = build(&snap(vec![d]), &empty(), "a", None);
+        let v = build(&snap(vec![d]), &empty(), "a", None, &[]);
         assert_eq!(v.rows[0].zones, "Board 4 · Header 1 2");
         assert_eq!(v.summary, "1 device · 6 lights");
     }
@@ -402,19 +418,19 @@ mod tests {
         let mut blue = red.clone();
         blue.colors = vec![BLUE; 8];
 
-        let v = build(&snap(vec![red.clone(), gpu.clone()]), &Ok(setup.clone()), "a", None);
+        let v = build(&snap(vec![red.clone(), gpu.clone()]), &Ok(setup.clone()), "a", None, &[]);
         assert_eq!(v.summary, "2 devices · 12 lights · 1 kept");
         assert_eq!(v.rows[0].status, Status::Kept);
         assert_eq!(v.rows[0].status_text, "Kept: Chase Fade in #ff0000.");
         assert_eq!(v.rows[1].status, Status::NotKept);
         assert!(v.rows[1].can_keep);
 
-        let v = build(&snap(vec![blue]), &Ok(setup.clone()), "a", None);
+        let v = build(&snap(vec![blue]), &Ok(setup.clone()), "a", None, &[]);
         assert_eq!(v.rows[0].status, Status::Differs);
 
         let mut more = red.clone();
         more.colors.push(RED);
-        let v = build(&snap(vec![more]), &Ok(setup), "a", None);
+        let v = build(&snap(vec![more]), &Ok(setup), "a", None, &[]);
         assert_eq!(v.rows[0].status, Status::Changed);
         assert!(v.rows[0].status_text.contains("9 lights"));
     }
@@ -422,7 +438,7 @@ mod tests {
     #[test]
     fn a_dark_device_says_why_it_cant_be_kept() {
         let dark = device(Kind::Keyboard, "Apex", "Direct", vec![Rgb::default(); 4], false);
-        let v = build(&snap(vec![dark]), &empty(), "a", None);
+        let v = build(&snap(vec![dark]), &empty(), "a", None, &[]);
         assert!(v.rows[0].can_keep, "it can be kept, after the row asks");
         assert!(v.rows[0].dark);
         assert!(v.rows[0].status_text.contains("another app may be lighting it"));
@@ -432,7 +448,7 @@ mod tests {
     fn an_unusable_setup_turns_keeping_off_and_says_so() {
         let red = device(Kind::Ram, "ENE DRAM", "Chase Fade", vec![RED; 8], false);
         let notice = Notice { text: "Kept RAM stick 1.".into(), warn: false };
-        let v = build(&snap(vec![red]), &Err("it isn't valid JSON".into()), "a", Some(&notice));
+        let v = build(&snap(vec![red]), &Err("it isn't valid JSON".into()), "a", Some(&notice), &[]);
         assert!(v.notice_warn);
         assert!(v.notice.contains("it isn't valid JSON"));
         assert!(!v.rows[0].can_keep);
@@ -461,22 +477,37 @@ mod tests {
         let mut now = red.clone();
         now.modes[0].name = "Onboard".into();
         now.modes[0].color_mode = keeplight_core::device::color_mode::NONE;
-        let v = build(&snap(vec![now]), &Ok(setup), "a", None);
+        let v = build(&snap(vec![now]), &Ok(setup), "a", None, &[]);
         assert_eq!(v.rows[0].status, Status::NotKept);
         assert!(v.rows[0].has_before);
-        assert_eq!(
-            v.rows[0].status_text,
-            "On its own lighting (Onboard). Keeplight can't see its colors. Kept before as Direct in #ff0000."
-        );
+        assert_eq!(v.rows[0].status_text, "Keeplight can't see the colors it shows. Kept before as Direct in #ff0000.");
         assert!(v.rows[0].own_lighting);
         assert_eq!(v.rows[0].swatch, None);
         assert!(v.rows[0].can_keep, "it can still be kept as it is now");
     }
 
     #[test]
+    fn each_row_says_what_probably_lights_it() {
+        let ram = device(Kind::Ram, "ENE DRAM", "Chase Fade", vec![RED; 8], false);
+        let mut setup = Setup::default();
+        setup.keep(Kept::capture(&ram).unwrap());
+        let mut kb = device(Kind::Keyboard, "SteelSeries Apex", "Onboard", vec![RED; 4], false);
+        kb.modes[0].color_mode = keeplight_core::device::color_mode::NONE;
+        let v = build(&snap(vec![ram.clone(), kb]), &Ok(setup.clone()), "a", None, &[]);
+        assert_eq!(v.rows[0].lit_by, "Keeplight, which keeps it");
+        assert_eq!(v.rows[1].lit_by, "its own memory (Onboard)");
+        assert!(!v.rows[0].lit_by_warn);
+
+        let mut asus_ram = ram.clone();
+        asus_ram.vendor = "ENE".into();
+        let v = build(&snap(vec![asus_ram]), &Ok(setup), "a", None, &["armourycrate.service.exe".into()]);
+        assert!(v.rows[0].lit_by_warn, "Armoury Crate may fight Keeplight over kept RAM");
+    }
+
+    #[test]
     fn the_last_action_shows_as_a_notice() {
         let notice = Notice { text: "Put back RAM stick 1.".into(), warn: false };
-        let v = build(&snap(vec![]), &empty(), "a", Some(&notice));
+        let v = build(&snap(vec![]), &empty(), "a", Some(&notice), &[]);
         assert_eq!(v.notice, "Put back RAM stick 1.");
         assert!(!v.notice_warn);
     }

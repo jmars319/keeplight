@@ -42,6 +42,10 @@ Tests against a fake server hold this, including `put_back_all_restores_every_ke
 - `settings.json` beside it: Keeplight's preferences, today only whether the keeper shows its icon in the notification area (off by default). A missing or unreadable file means the defaults.
 - The startup entry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `Keeplight`, holding `"<path to keeplight.exe>" --keep`. Written only when you turn on **Put kept lights back when you sign in**, and removed when you turn it off or uninstall. `KEEPLIGHT_STARTUP_NAME` renames the value, which the smoke test uses so it never touches the real one.
 
+## Read from Windows
+
+- **The names of running programs**, every few seconds while the window is open, to guess what lights each device: a maker's lighting app (SteelSeries GG, Logitech G HUB, Armoury Crate, Corsair iCUE, Razer Synapse, EVGA Precision X1, NZXT CAM, Gigabyte RGB Fusion) or SignalRGB. Only the names are read, needing no admin rights; they stay in memory, are never written or sent, and only decide the "Lit by" line (`core::lit_by`).
+
 ## Processes
 
 - `keeplight.exe --keep`, the keeper. It has no window and is started by Windows at sign-in when the switch is on, or by the window the moment you turn the switch on. It runs only while the switch is on: once its stop listener is set up, it checks that the startup entry still exists, and exits without changing anything if it doesn't. Turning the switch off removes the entry before it signals stop, so a keeper that is still starting can't miss it. Each time it puts kept devices back, it waits up to 2 minutes for OpenRGB to list them all, then logs the result. It stays running until you sign out:

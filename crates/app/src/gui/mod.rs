@@ -44,7 +44,9 @@ pub fn run() -> i32 {
         loop {
             let result = keeplight_core::sdk::snapshot(&address).map_err(|e| e.to_string());
             let setup = Setup::load(&setup_path).map_err(|e| e.to_string());
-            let mut v = view::build(&result, &setup, &address, notice.as_ref());
+            // This PC's programs only say something about devices on this PC.
+            let running = if is_this_pc(&address) { crate::platform::running_programs() } else { Vec::new() };
+            let mut v = view::build(&result, &setup, &address, notice.as_ref(), &running);
             let kept = setup.as_ref().map_or(0, |s| s.devices.len());
             let this_exe = crate::platform::startup::command_for_this_exe().ok();
             (v.sign_in, v.sign_in_note) =
@@ -97,6 +99,13 @@ pub fn run() -> i32 {
             1
         }
     }
+}
+
+/// Whether an OpenRGB address is on this PC: a loopback host. Anything else
+/// is another computer, whose lighting apps this PC can't see.
+fn is_this_pc(address: &str) -> bool {
+    use std::net::ToSocketAddrs;
+    address.to_socket_addrs().map(|mut a| a.all(|a| a.ip().is_loopback())).unwrap_or(false)
 }
 
 /// A button press, carrying the row it came from.
@@ -248,6 +257,8 @@ fn apply(ui: &AppWindow, v: view::View) {
             dark: r.dark,
             has_before: r.has_before,
             own_lighting: r.own_lighting,
+            lit_by: r.lit_by.into(),
+            lit_by_warn: r.lit_by_warn,
             name: r.name.into(),
             product: r.product.into(),
             meta: r.meta.into(),
@@ -307,5 +318,19 @@ fn window_hwnd(ui: &AppWindow) -> Option<windows::Win32::Foundation::HWND> {
     match handle.window_handle().ok()?.as_raw() {
         RawWindowHandle::Win32(h) => Some(windows::Win32::Foundation::HWND(h.hwnd.get() as *mut _)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_this_pc;
+
+    #[test]
+    fn only_loopback_addresses_are_this_pc() {
+        assert!(is_this_pc("127.0.0.1:6742"));
+        assert!(is_this_pc("localhost:6742"));
+        assert!(is_this_pc("[::1]:6742"));
+        assert!(!is_this_pc("192.168.1.20:6742"));
+        assert!(!is_this_pc("not an address"));
     }
 }

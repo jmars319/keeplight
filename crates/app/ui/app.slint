@@ -20,6 +20,10 @@ export struct DeviceRow {
     has-before: bool,
     // It runs a lighting mode of its own, so its colors are unknown.
     own-lighting: bool,
+    // What probably lights it, after "Lit by: "; warn when another app may
+    // fight Keeplight over it.
+    lit-by: string,
+    lit-by-warn: bool,
     name: string,
     product: string,
     meta: string,
@@ -113,7 +117,8 @@ component DeviceRowView inherits Rectangle {
         + (root.item.own-lighting ? "" : root.item.lit ? "" : ", all lights off") + "."
         // The note and status are sentences that end in their own period.
         + (root.item.note != "" ? " " + root.item.note : "")
-        + (root.item.status-text != "" ? " " + root.item.status-text : "");
+        + (root.item.status-text != "" ? " " + root.item.status-text : "")
+        + (root.item.lit-by != "" ? " Lit by " + root.item.lit-by + "." : "");
 
     content := HorizontalLayout {
         padding-left: 16px;
@@ -173,6 +178,13 @@ component DeviceRowView inherits Rectangle {
                 text: root.item.note;
                 font-size: 12px;
                 color: Theme.warning;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+            if root.item.lit-by != "": Text {
+                text: "Lit by: " + root.item.lit-by;
+                font-size: 12px;
+                color: root.item.lit-by-warn ? Theme.warning : Theme.secondary-text;
                 wrap: word-wrap;
                 accessible-role: none;
             }

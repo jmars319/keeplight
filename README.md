@@ -14,6 +14,7 @@ Early development, nothing released yet. Stage 02, the keeper, is being built:
 
 - **Lists every device OpenRGB reports**, by plain name ("RAM stick 2", "Graphics card"), with the product name, light count, current effect and zones.
 - **Shows each device's current color** as a swatch, read back from the device. A device running a lighting mode of its own, such as the keyboard's Onboard mode, shows a spectrum instead, because OpenRGB can't see the colors another app or the device itself is setting.
+- **Says what probably lights each device** ("Lit by: its own memory (Onboard)", "probably SteelSeries GG, which is running", "Keeplight, which keeps it"), from the mode OpenRGB reports and which lighting apps are running, and warns when another app is running that may change a device Keeplight keeps.
 - **Flags devices that cannot store a color themselves**, which go back to their own lighting whenever they lose power.
 - **Keep this** saves what a device shows now into Keeplight's own setup file. Set colors in OpenRGB first; a color picker comes in a later stage.
 - **Put back** is on every kept device, highlighted when it shows something else, and sends that one device its kept mode and colors. After a power cut the lights can differ while OpenRGB's record still matches, so it's always there.
