@@ -114,6 +114,13 @@
           "description": "The device's display name, such as \"RAM stick 1\".",
           "type": "string"
         },
+        "location": {
+          "type": "string"
+        },
+        "product": {
+          "description": "The product name and location OpenRGB reported for it when planned.\nApplying acts on the device at that location, never on whichever one\nholds the same id after OpenRGB lists devices in another order.",
+          "type": "string"
+        },
         "steps": {
           "type": "array",
           "items": {
@@ -124,6 +131,8 @@
       "required": [
         "change",
         "deviceName",
+        "product",
+        "location",
         "steps"
       ]
     },

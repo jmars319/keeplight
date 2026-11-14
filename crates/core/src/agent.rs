@@ -164,6 +164,11 @@ pub struct ChangePlan {
     pub change: Change,
     /// The device's display name, such as "RAM stick 1".
     pub device_name: String,
+    /// The product name and location OpenRGB reported for it when planned.
+    /// Applying acts on the device at that location, never on whichever one
+    /// holds the same id after OpenRGB lists devices in another order.
+    pub product: String,
+    pub location: String,
     pub steps: Vec<String>,
 }
 
@@ -539,7 +544,13 @@ impl Engine {
                 Precondition::file(&self.paths.setup())?,
                 Precondition::record(record_key(&checked.device), Some(&device_state(&checked.device))),
             ];
-            let payload = ChangePlan { change: change.clone(), device_name: checked.name, steps: checked.steps };
+            let payload = ChangePlan {
+                change: change.clone(),
+                device_name: checked.name,
+                product: checked.device.name.clone(),
+                location: checked.device.location.clone(),
+                steps: checked.steps,
+            };
             self.plans().save(TARGET, payload, preconditions)
         })();
         match &result {
@@ -563,27 +574,37 @@ impl Engine {
     pub fn apply(&self, caller: &Caller, plan_id: &str, request: Option<&str>) -> Result<Applied> {
         let result: Result<Applied> = (|| {
             let write = authorize_write(caller, self.settings().ai_changes, request)?;
-            let _lock = keep::SetupLock::acquire(&self.paths.setup()).map_err(from_setup)?;
+            // Held from the check through the write, so nothing changes the
+            // setup in between (the window, the keeper, another command line).
+            let lock = keep::SetupLock::acquire(&self.paths.setup()).map_err(from_setup)?;
             let snapshot = self.snapshot()?;
             let setup = self.setup()?;
             let record = |key: &str| -> Result<Option<String>> {
                 Ok(snapshot.devices.iter().find(|d| record_key(d) == key).map(|d| sha256_hex(&device_state(d))))
             };
+            // The planned device by its location, not by its id: ids are
+            // positions, and OpenRGB can list devices in another order.
+            let recheck = |p: &ChangePlan| {
+                let pinned = Change { action: p.change.action, device: p.location.clone() };
+                let again = check(&pinned, &snapshot.devices, &setup)?;
+                // The same physical device may now be numbered differently
+                // ("RAM stick 2" instead of "RAM stick 1"); compare its steps
+                // under the name it was planned with.
+                let steps: Vec<String> = again.steps.iter().map(|s| s.replace(&again.name, &p.device_name)).collect();
+                if again.device.name != p.product || steps != p.steps {
+                    return Err(AgentError::new(
+                        kit::CHANGED_MEANWHILE,
+                        "The change would now do something else than planned. Plan it again. Nothing was changed.",
+                    ));
+                }
+                Ok(again)
+            };
             let plan: Plan<ChangePlan> =
-                self.plans().take(&write, plan_id, TARGET, record, |p: &Plan<ChangePlan>| {
-                    let again = check(&p.payload.change, &snapshot.devices, &setup)?;
-                    if again.steps == p.payload.steps {
-                        Ok(())
-                    } else {
-                        Err(AgentError::new(
-                            kit::CHANGED_MEANWHILE,
-                            "The change would now do something else than planned. Plan it again. Nothing was changed.",
-                        ))
-                    }
-                })?;
-            drop(_lock);
-            let checked = check(&plan.payload.change, &snapshot.devices, &setup)?;
-            let mut applied = self.perform(&write, &plan.payload.change, &checked)?;
+                self.plans()
+                    .take(&write, plan_id, TARGET, record, |p: &Plan<ChangePlan>| recheck(&p.payload).map(|_| ()))?;
+            let checked = recheck(&plan.payload)?;
+            let mut applied = self.perform(&lock, &write, &plan.payload.change, &checked)?;
+            drop(lock);
             applied.plan_id = Some(plan.plan_id.clone());
             applied.journal_problem =
                 journal::append(&self.paths.data, &write, TARGET, &plan.plan_id, &checked.steps, None)
@@ -602,9 +623,10 @@ impl Engine {
     pub fn change_now(&self, caller: &Caller, change: Change) -> Result<Applied> {
         let result: Result<Applied> = (|| {
             let write = authorize_write(caller, self.settings().ai_changes, None)?;
+            let lock = keep::SetupLock::acquire(&self.paths.setup()).map_err(from_setup)?;
             let snapshot = self.snapshot()?;
             let checked = check(&change, &snapshot.devices, &self.setup()?)?;
-            self.perform(&write, &change, &checked)
+            self.perform(&lock, &write, &change, &checked)
         })();
         if let Err(e) = &result {
             self.log(LogLevel::Warn, "change.refused", caller, Some(&change.device), None, &e.message, Some(e));
@@ -612,20 +634,28 @@ impl Engine {
         result
     }
 
-    /// The one write path, after a check and an authorized caller.
-    fn perform(&self, write: &Authorized, change: &Change, checked: &Checked) -> Result<Applied> {
+    /// The one write path, after a check, under the setup lock the check was
+    /// made under, for an authorized caller.
+    fn perform(
+        &self,
+        lock: &keep::SetupLock,
+        write: &Authorized,
+        change: &Change,
+        checked: &Checked,
+    ) -> Result<Applied> {
         let (address, setup, d, name) = (&self.address, self.paths.setup(), &checked.device, checked.name.as_str());
         let (effect, result, held) = match change.action {
             Action::Keep | Action::KeepDark => {
                 let dark = if change.action == Action::KeepDark { Dark::Allow } else { Dark::Refuse };
-                let k = keep::keep_now(address, &setup, &d.name, &d.location, dark).map_err(from_action)?;
+                let k =
+                    keep::keep_now_locked(lock, address, &setup, &d.name, &d.location, dark).map_err(from_action)?;
                 (Effect::Kept, format!("Keeping {name} as {}.", describe(&k)), None)
             }
             Action::PutBack | Action::KeepAsBefore => {
                 let outcome = if change.action == Action::PutBack {
-                    keep::put_back_now(address, &setup, &d.name, &d.location)
+                    keep::put_back_now_locked(lock, address, &setup, &d.name, &d.location)
                 } else {
-                    keep::keep_as_before(address, &setup, &d.name, &d.location)
+                    keep::keep_as_before_locked(lock, address, &setup, &d.name, &d.location)
                 }
                 .map_err(from_action)?;
                 let (words, held) = match &outcome {
@@ -638,7 +668,8 @@ impl Engine {
                 (Effect::PutBack(outcome), words, held)
             }
             Action::StopKeeping => {
-                let back = keep::stop_keeping(address, &setup, &d.name, &d.location).map_err(from_action)?;
+                let back =
+                    keep::stop_keeping_locked(lock, address, &setup, &d.name, &d.location).map_err(from_action)?;
                 let words = match &back {
                     HandBack::OwnLighting(m) => format!("Stopped keeping {name}; it's back on its own {m} lighting."),
                     HandBack::NotTaken(m, now) => {
@@ -797,6 +828,39 @@ mod tests {
         server.state.lock().unwrap().devices[0].colors[0] = crate::device::Rgb { r: 0, g: 0, b: 255 };
         assert_eq!(e.apply(&Caller::Cli, &plan.plan_id, None).unwrap_err().code, kit::CHANGED_MEANWHILE);
         assert!(Setup::load(&e.paths.setup()).unwrap().devices.is_empty());
+    }
+
+    #[test]
+    fn a_plan_follows_its_device_when_openrgb_reorders_them() {
+        let d = data("reorder");
+        // Two identical sticks: the plan for ram-stick-1 is for the one at 0x71.
+        let server = FakeServer::start(vec![testing::ram("SMBus 0x71"), testing::ram("SMBus 0x73")]);
+        let e = engine(&server, &d);
+        let plan = e.plan(&Caller::Cli, change(Action::Keep, "ram-stick-1")).unwrap();
+        assert_eq!(plan.payload.location, "SMBus 0x71");
+        // OpenRGB now lists them the other way round.
+        server.state.lock().unwrap().devices.reverse();
+        e.apply(&Caller::Cli, &plan.plan_id, None).unwrap();
+        let setup = Setup::load(&e.paths.setup()).unwrap();
+        assert_eq!(setup.devices.len(), 1);
+        assert_eq!(setup.devices[0].location, "SMBus 0x71", "the planned stick, not the one now first");
+    }
+
+    #[test]
+    fn the_setup_lock_is_held_from_the_check_through_the_write() {
+        let d = data("held");
+        let server = FakeServer::start(vec![testing::ram("SMBus 0x71")]);
+        let e = engine(&server, &d);
+        let plan = e.plan(&Caller::Cli, change(Action::Keep, "ram-stick")).unwrap();
+        // While another process holds the lock, apply waits rather than
+        // checking and writing around it.
+        let held = keep::SetupLock::acquire(&e.paths.setup()).unwrap();
+        let (paths, address, id) = (e.paths.clone(), e.address.clone(), plan.plan_id.clone());
+        let waiter = std::thread::spawn(move || Engine::new(paths, address).apply(&Caller::Cli, &id, None).map(|_| ()));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!waiter.is_finished(), "apply waits for the lock");
+        drop(held);
+        waiter.join().unwrap().unwrap();
     }
 
     #[test]

@@ -327,11 +327,23 @@ pub enum Dark {
     Allow,
 }
 
+/// Takes the setup lock, then [`keep_now_locked`].
+pub fn keep_now(address: &str, setup_path: &Path, name: &str, location: &str, dark: Dark) -> Result<Kept, ActionError> {
+    let lock = SetupLock::acquire(setup_path)?;
+    keep_now_locked(&lock, address, setup_path, name, location, dark)
+}
+
 /// Keeps what the named device shows right now: reads it fresh from OpenRGB
 /// at `address` and saves it into the setup at `setup_path`. Sends nothing
 /// that changes a light.
-pub fn keep_now(address: &str, setup_path: &Path, name: &str, location: &str, dark: Dark) -> Result<Kept, ActionError> {
-    let _lock = SetupLock::acquire(setup_path)?;
+pub fn keep_now_locked(
+    _held: &SetupLock,
+    address: &str,
+    setup_path: &Path,
+    name: &str,
+    location: &str,
+    dark: Dark,
+) -> Result<Kept, ActionError> {
     // Read the setup first, so an unreadable one is never saved over.
     let mut setup = Setup::load(setup_path)?;
     let mut client = Client::connect(address)?;
@@ -347,13 +359,23 @@ pub fn keep_now(address: &str, setup_path: &Path, name: &str, location: &str, da
     Ok(kept)
 }
 
+/// Takes the setup lock, then [`stop_keeping_locked`].
+pub fn stop_keeping(address: &str, setup_path: &Path, name: &str, location: &str) -> Result<HandBack, ActionError> {
+    let lock = SetupLock::acquire(setup_path)?;
+    stop_keeping_locked(&lock, address, setup_path, name, location)
+}
+
 /// Stops keeping the named device: removes it from the setup, then hands it
 /// back to its own lighting when it is in Direct mode and has a built-in mode
 /// to go back to. Sends that one device at most one `UPDATE_MODE`, with the
 /// built-in mode exactly as OpenRGB reported it.
-pub fn stop_keeping(address: &str, setup_path: &Path, name: &str, location: &str) -> Result<HandBack, ActionError> {
-    // Held through the hand-back, so a keeper run can't slip in between.
-    let _lock = SetupLock::acquire(setup_path)?;
+pub fn stop_keeping_locked(
+    _held: &SetupLock,
+    address: &str,
+    setup_path: &Path,
+    name: &str,
+    location: &str,
+) -> Result<HandBack, ActionError> {
     let mut setup = Setup::load(setup_path)?;
     let Some(at) = setup.devices.iter().position(|k| k.name == name && k.location == location) else {
         return Err(ActionError::NotKept);
@@ -381,9 +403,20 @@ pub fn stop_keeping(address: &str, setup_path: &Path, name: &str, location: &str
     })
 }
 
-/// Puts the named device back to what is kept for it (see [`put_back`]).
+/// Takes the setup lock, then [`put_back_now_locked`].
 pub fn put_back_now(address: &str, setup_path: &Path, name: &str, location: &str) -> Result<Outcome, ActionError> {
-    let _lock = SetupLock::acquire(setup_path)?;
+    let lock = SetupLock::acquire(setup_path)?;
+    put_back_now_locked(&lock, address, setup_path, name, location)
+}
+
+/// Puts the named device back to what is kept for it (see [`put_back`]).
+pub fn put_back_now_locked(
+    _held: &SetupLock,
+    address: &str,
+    setup_path: &Path,
+    name: &str,
+    location: &str,
+) -> Result<Outcome, ActionError> {
     let setup = Setup::load(setup_path)?;
     let mut client = Client::connect(address)?;
     let device = find_device(&mut client, name, location)?;
@@ -391,10 +424,21 @@ pub fn put_back_now(address: &str, setup_path: &Path, name: &str, location: &str
     Ok(put_back(&mut client, kept, &device)?)
 }
 
+/// Takes the setup lock, then [`keep_as_before_locked`].
+pub fn keep_as_before(address: &str, setup_path: &Path, name: &str, location: &str) -> Result<Outcome, ActionError> {
+    let lock = SetupLock::acquire(setup_path)?;
+    keep_as_before_locked(&lock, address, setup_path, name, location)
+}
+
 /// Keeps the named device as it was kept before you stopped keeping it, and
 /// puts it back to that now (see [`put_back`]).
-pub fn keep_as_before(address: &str, setup_path: &Path, name: &str, location: &str) -> Result<Outcome, ActionError> {
-    let _lock = SetupLock::acquire(setup_path)?;
+pub fn keep_as_before_locked(
+    _held: &SetupLock,
+    address: &str,
+    setup_path: &Path,
+    name: &str,
+    location: &str,
+) -> Result<Outcome, ActionError> {
     let mut setup = Setup::load(setup_path)?;
     let mut client = Client::connect(address)?;
     let device = find_device(&mut client, name, location)?;
