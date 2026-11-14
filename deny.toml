@@ -36,7 +36,11 @@ wildcards = "deny"
 allow-wildcard-paths = true
 # No HTTP or TLS crates. Keeplight's only connection is to OpenRGB on
 # 127.0.0.1, over a plain TCP socket from the standard library.
-# No async runtime either: the OpenRGB client is synchronous on purpose.
+# No async runtime either, except at one edge: the OpenRGB client, the window
+# and the keeper are synchronous on purpose. tokio is allowed only through
+# rmcp (with its tokio-stream and tokio-util) and keeplight-core's MCP server
+# (`keeplight-cli mcp`), owner decision
+# 2026-11-13 (docs/adr/0001-build-on-openrgb.md, docs/ai.md).
 deny = [
     { crate = "reqwest" },
     { crate = "hyper" },
@@ -46,7 +50,8 @@ deny = [
     { crate = "openssl" },
     { crate = "native-tls" },
     { crate = "rustls" },
-    { crate = "tokio" },
+    { crate = "tokio", wrappers = ["rmcp", "tokio-stream", "tokio-util", "keeplight-core"] },
+    { crate = "axum" },
     # openrgb2 is GPL-2.0-only, which cannot be combined with this
     # GPL-3.0-only app, and openrgb is its unmaintained predecessor
     # (docs/adr/0001-build-on-openrgb.md).

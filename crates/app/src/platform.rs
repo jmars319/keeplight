@@ -1,48 +1,19 @@
 //! Process and Windows lookups, kept here so the rest of the app stays
 //! testable.
 
-/// `KEEPLIGHT_OPENRGB` names another `host:port` for OpenRGB's SDK server.
-/// Development and smoke-test runs use it to point at a fake server instead
-/// of the real lights.
+/// OpenRGB's SDK address (see `keeplight_core::paths::openrgb_address`).
 pub fn openrgb_address() -> String {
-    std::env::var("KEEPLIGHT_OPENRGB")
-        .ok()
-        .filter(|a| !a.is_empty())
-        .unwrap_or_else(|| keeplight_core::sdk::DEFAULT_ADDRESS.to_string())
-}
-
-/// The names of running programs, in lower case, such as "lghub_agent.exe",
-/// for guessing which lighting app lights a device. Reading the list needs no
-/// admin rights; an empty list on failure only makes the guess vaguer.
-#[cfg(windows)]
-pub fn running_programs() -> Vec<String> {
-    use windows::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
-    };
-    let mut names = Vec::new();
-    // SAFETY: a process snapshot read entry by entry, then closed.
-    unsafe {
-        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return names };
-        let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
-        let mut more = Process32FirstW(snapshot, &mut entry).is_ok();
-        while more {
-            let end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-            names.push(String::from_utf16_lossy(&entry.szExeFile[..end]).to_lowercase());
-            more = Process32NextW(snapshot, &mut entry).is_ok();
-        }
-        let _ = windows::Win32::Foundation::CloseHandle(snapshot);
-    }
-    names
+    keeplight_core::paths::openrgb_address()
 }
 
 /// Keeplight's preferences, beside the setup file.
 pub fn settings_path() -> std::path::PathBuf {
-    setup_path().with_file_name("settings.json")
+    keeplight_core::paths::Paths::from_env().settings()
 }
 
 /// The keeper's log, beside the setup file.
 pub fn log_path() -> std::path::PathBuf {
-    setup_path().with_file_name("keeper.log")
+    keeplight_core::paths::Paths::from_env().keeper_log()
 }
 
 /// Appends lines to the keeper's log, keeping only its last 400 lines once it
@@ -311,19 +282,9 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// Where the setup you chose to keep is saved: `setup.json` in
-/// `KEEPLIGHT_DATA` when set (tests and smoke tests point it at a throwaway
-/// folder), otherwise in `%LOCALAPPDATA%\Keeplight`.
+/// Where the setup you chose to keep is saved (see `keeplight_core::paths`).
 pub fn setup_path() -> std::path::PathBuf {
-    let dir = std::env::var_os("KEEPLIGHT_DATA")
-        .filter(|d| !d.is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            let base =
-                std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
-            base.join("Keeplight")
-        });
-    dir.join("setup.json")
+    keeplight_core::paths::Paths::from_env().setup()
 }
 
 #[cfg(windows)]
