@@ -196,6 +196,13 @@ try {
     Click 'Let AI tools make changes'
     Check 'switch: AI changes off is saved' (Eventually { -not (AiChanges) })
     Check 'the connect lines name keeplight-cli' (Eventually { Has 'Command to connect an AI app: claude mcp add*keeplight-cli.exe" mcp' })
+    # Last, since it keeps every device: one color for everything.
+    Wheel -20
+    Click 'Set every device to one color'
+    Check 'button: Set everything opens the colors' (Eventually { Has 'Set everything to green' })
+    Click 'Set everything to green'
+    function KeptGreen { @(Kept | Where-Object { ($_.colors -and $_.colors[0] -eq '#00ff40') -or ($_.mode.colors -and $_.mode.colors[0] -eq '#00ff40') }).Count }
+    Check 'Set everything keeps every device in it' (Eventually { (Kept).Count -eq 4 -and (KeptGreen) -eq 4 })
 } finally {
     Remove-ItemProperty -Path $run -Name $entry -ErrorAction SilentlyContinue
     if ($p -and -not $p.HasExited) { $p.Kill(); $p.WaitForExit() }

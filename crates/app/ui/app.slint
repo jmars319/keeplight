@@ -71,6 +71,9 @@ export global Ui {
     callback keep-as-before(DeviceRow);
     // A color as #rrggbb, set and kept.
     callback set-color(DeviceRow, string, string);
+    // One color for every device that can take it.
+    in property <bool> can-set-everything;
+    callback set-everything(string);
     // The keeper at sign-in.
     in-out property <bool> sign-in;
     in property <string> sign-in-note;
@@ -150,14 +153,20 @@ component ColorDot inherits Rectangle {
 }
 
 component ColorPicker inherits VerticalLayout {
-    in property <DeviceRow> item;
+    // "RAM stick 1", or "everything".
+    in property <string> target-name;
+    in property <[ZoneItem]> zone-list;
+    in property <[string]> zone-choices;
+    in property <bool> can-color-zones;
+    // A color as #rrggbb, and the zone's name or "" for all of it.
+    callback chosen(string, string);
     callback done();
     // The zone a pick goes to: "" for the whole device.
     property <int> zone-index: 0;
-    property <string> zone: root.zone-index <= 0 ? "" : root.item.zone-list[root.zone-index - 1].name;
-    property <string> target: root.zone == "" ? root.item.name : root.item.name + " " + root.zone;
+    property <string> zone: root.zone-index <= 0 ? "" : root.zone-list[root.zone-index - 1].name;
+    property <string> target: root.zone == "" ? root.target-name : root.target-name + " " + root.zone;
     spacing: 8px;
-    if root.item.can-color-zones: HorizontalLayout {
+    if root.can-color-zones: HorizontalLayout {
         spacing: 8px;
         alignment: start;
         Text {
@@ -167,10 +176,10 @@ component ColorPicker inherits VerticalLayout {
             vertical-alignment: center;
         }
         ComboBox {
-            model: root.item.zone-choices;
+            model: root.zone-choices;
             current-index <=> root.zone-index;
             width: 220px;
-            accessible-label: "Which part of " + root.item.name + " to color";
+            accessible-label: "Which part of " + root.target-name + " to color";
         }
     }
     HorizontalLayout {
@@ -192,7 +201,7 @@ component ColorPicker inherits VerticalLayout {
                 fill: c.fill;
                 label: "Set " + root.target + " to " + c.name;
                 picked => {
-                    Ui.set-color(root.item, c.hex, root.zone);
+                    root.chosen(c.hex, root.zone);
                     root.done();
                 }
             }
@@ -203,7 +212,7 @@ component ColorPicker inherits VerticalLayout {
             font-size: 12px;
             accessible-label: "Color for " + root.target + " as #rrggbb";
             accepted => {
-                Ui.set-color(root.item, self.text, root.zone);
+                root.chosen(self.text, root.zone);
                 root.done();
             }
         }
@@ -212,13 +221,13 @@ component ColorPicker inherits VerticalLayout {
             enabled: !Ui.busy && hex.text != "";
             accessible-label: "Set " + root.target + " to the color typed";
             clicked => {
-                Ui.set-color(root.item, hex.text, root.zone);
+                root.chosen(hex.text, root.zone);
                 root.done();
             }
         }
         Button {
             text: "Cancel";
-            accessible-label: "Close the colors for " + root.item.name;
+            accessible-label: "Close the colors for " + root.target-name;
             clicked => { root.done(); }
         }
     }
@@ -410,7 +419,11 @@ component DeviceRowView inherits Rectangle {
             }
         }
         if root.picking: ColorPicker {
-            item: root.item;
+            target-name: root.item.name;
+            zone-list: root.item.zone-list;
+            zone-choices: root.item.zone-choices;
+            can-color-zones: root.item.can-color-zones;
+            chosen(hex, zone) => { Ui.set-color(root.item, hex, zone); }
             done => { root.picking = false; }
         }
     }
@@ -434,6 +447,8 @@ export component AppWindow inherits Window {
     }
 
     property <length> gutter: 24px;
+    // Showing the colors for Set everything.
+    property <bool> picking-all;
 
     // After a restore from minimized, the software renderer's partial repaint
     // left everything outside changed items unpainted. Flipping this flag
@@ -481,6 +496,33 @@ export component AppWindow inherits Window {
                     text: Ui.chip;
                     warn: Ui.chip-warn;
                 }
+            }
+            if Ui.screen == "devices" && Ui.can-set-everything && !root.picking-all: VerticalLayout {
+                alignment: center;
+                Button {
+                    text: "Set everything…";
+                    enabled: !Ui.busy;
+                    accessible-label: "Set every device to one color";
+                    clicked => { root.picking-all = true; }
+                }
+            }
+        }
+
+        if root.picking-all: VerticalLayout {
+            padding-left: gutter;
+            padding-right: gutter;
+            padding-bottom: 12px;
+            spacing: 8px;
+            Text {
+                text: "One color for every device that can take it. Each is kept, and Keep it as before undoes it device by device.";
+                font-size: 12px;
+                color: Theme.secondary-text;
+                wrap: word-wrap;
+            }
+            ColorPicker {
+                target-name: "everything";
+                chosen(hex, zone) => { Ui.set-everything(hex); }
+                done => { root.picking-all = false; }
             }
         }
 

@@ -85,6 +85,14 @@ pub fn run() -> i32 {
     {
         let tx = tx.clone();
         let weak = ui.as_weak();
+        let tx2 = tx.clone();
+        let weak2 = ui.as_weak();
+        g.on_set_everything(move |color| {
+            if let Some(ui) = weak2.upgrade() {
+                ui.global::<Ui>().set_busy(true);
+            }
+            let _ = tx2.send(Command::SetEverything(color.to_string()));
+        });
         g.on_set_color(move |row, color, zone| {
             if let Some(ui) = weak.upgrade() {
                 ui.global::<Ui>().set_busy(true);
@@ -153,6 +161,8 @@ enum Command {
     /// Set a device, or one zone of it (by name; empty for the whole device),
     /// to a color (#rrggbb) and keep it.
     SetColor(Target, String, String),
+    /// One color for every device that can take it.
+    SetEverything(String),
     /// Turn the keeper at sign-in on or off.
     SignIn(bool),
     /// Show or hide the keeper's icon in the notification area.
@@ -244,6 +254,16 @@ fn run_command(command: &Command, engine: &Engine) -> view::Notice {
         Command::PutBack(row) => device_change(engine, Action::PutBack, row),
         Command::StopKeeping(row) => device_change(engine, Action::StopKeeping, row),
         Command::KeepAsBefore(row) => device_change(engine, Action::KeepAsBefore, row),
+        Command::SetEverything(color) => match engine.set_everything(&Caller::Window, color) {
+            Ok(r) => {
+                let mut text = format!("Set {} of {} devices to {} and kept them.", r.set(), r.devices.len(), r.color);
+                for d in r.devices.iter().filter(|d| d.problem.is_some()) {
+                    text.push_str(&format!(" {}: {}", d.name, d.problem.as_deref().unwrap_or_default()));
+                }
+                note(text, r.set() < r.devices.len())
+            }
+            Err(e) => note(format!("Couldn't set everything. {}", e.message), true),
+        },
         Command::SetColor(row, color, zone) => {
             let change = Change::set_color(row.location.clone(), color.clone());
             let change = if zone.is_empty() { change } else { change.in_zone(zone.clone()) };
@@ -319,6 +339,7 @@ fn apply(ui: &AppWindow, v: view::View) {
     g.set_heading(v.heading.into());
     g.set_message(v.message.into());
     g.set_summary(v.summary.into());
+    g.set_can_set_everything(v.rows.iter().any(|r| r.can_color));
     let fresh: Vec<DeviceRow> = v
         .rows
         .into_iter()
