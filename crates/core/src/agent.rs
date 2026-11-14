@@ -914,6 +914,8 @@ impl Engine {
         let settings = self.settings();
         let sections = serde_json::json!({
             "openrgb": { "address": self.address, "thisPc": crate::paths::is_this_pc(&self.address) },
+            // Only this PC's installs say anything about the OpenRGB in use.
+            "installs": crate::paths::is_this_pc(&self.address).then(crate::installs::read),
             "devices": devices,
             "setup": setup,
             "settings": { "aiChanges": settings.ai_changes, "trayIcon": settings.tray_icon },
