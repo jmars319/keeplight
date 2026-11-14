@@ -42,6 +42,10 @@ pub struct View {
     /// What Keeplight offers to install: (key, button label, the sentence the
     /// confirm step shows).
     pub offer: Option<(String, String, String)>,
+    /// "Tell me when a new Keeplight is out" (on by default).
+    pub update_check: bool,
+    /// A newer Keeplight: (the sentence, its installer's link).
+    pub update: Option<(String, String)>,
 }
 
 /// The sign-in switch's state and sentence. `current` is the registered
@@ -131,6 +135,17 @@ pub struct Row {
     pub lit_by: String,
     /// Another running app may fight Keeplight over it.
     pub lit_by_warn: bool,
+}
+
+/// The window's line for a newer Keeplight, and its installer's link.
+pub fn update_notice(r: &keeplight_core::update::Release, current: &str) -> (String, String) {
+    (
+        format!(
+            "Keeplight {} is out (you have {current}). It isn't code-signed yet, so Windows may warn before it runs.",
+            r.version
+        ),
+        r.url.clone(),
+    )
 }
 
 /// The window's offer for a tested installer: its key, its button and what
@@ -227,6 +242,8 @@ pub fn build(
         installs: String::new(),
         installs_warn: false,
         offer: None,
+        update_check: false,
+        update: None,
     }
 }
 
@@ -373,6 +390,8 @@ fn message(chip: &str, heading: &str, message: &str) -> View {
         installs: String::new(),
         installs_warn: false,
         offer: None,
+        update_check: false,
+        update: None,
     }
 }
 
@@ -459,6 +478,20 @@ mod tests {
         let v = build(&snap(vec![device(Kind::Keyboard, "Apex", "Direct", colors, false)]), &empty(), "a", None, &[]);
         assert_eq!(v.rows[0].swatch, Some((255, 0, 0)));
         assert!(v.rows[0].can_keep);
+    }
+
+    #[test]
+    fn a_newer_keeplight_is_named_with_its_link() {
+        let r = keeplight_core::update::parse(
+            r#"{"version":"0.2.0","url":"https://github.com/JAMARQ-Digital-LLC/jamarq-releases/releases/download/keeplight-v0.2.0/keeplight-0.2.0-x64-setup.exe","sha256":"00"}"#,
+        )
+        .unwrap();
+        let (text, url) = update_notice(&r, "0.1.0");
+        assert_eq!(
+            text,
+            "Keeplight 0.2.0 is out (you have 0.1.0). It isn't code-signed yet, so Windows may warn before it runs."
+        );
+        assert!(url.ends_with("keeplight-0.2.0-x64-setup.exe"));
     }
 
     #[test]

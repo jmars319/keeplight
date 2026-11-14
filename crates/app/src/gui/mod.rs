@@ -19,6 +19,7 @@ use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use crate::{AppWindow, DeviceRow, Ui, ZoneItem};
 
 const REFRESH: Duration = Duration::from_secs(3);
+const UPDATE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub fn run() -> i32 {
     let ui = match AppWindow::new() {
@@ -43,6 +44,10 @@ pub fn run() -> i32 {
     let weak = ui.as_weak();
     std::thread::spawn(move || {
         let mut notice: Option<view::Notice> = None;
+        // Whether a newer Keeplight is out: asked when the window opens and
+        // once a day while it stays open, unless turned off.
+        let mut update: Option<keeplight_core::update::Release> = None;
+        let mut last_check: Option<std::time::Instant> = None;
         loop {
             let result = keeplight_core::sdk::snapshot(&address).map_err(|e| e.to_string());
             let setup = Setup::load(&setup_path).map_err(|e| e.to_string());
@@ -55,6 +60,12 @@ pub fn run() -> i32 {
                 view::sign_in(crate::platform::startup::current().as_deref(), this_exe.as_deref(), kept);
             v.last_run = crate::platform::last_keeper_run().unwrap_or_default();
             let settings = keeplight_core::settings::Settings::load(&crate::platform::settings_path());
+            if settings.no_update_check {
+                update = None;
+            }
+            let check_due = !settings.no_update_check && last_check.is_none_or(|t| t.elapsed() >= UPDATE_EVERY);
+            v.update_check = !settings.no_update_check;
+            v.update = update.as_ref().map(|r| view::update_notice(r, env!("CARGO_PKG_VERSION")));
             v.tray_icon = settings.tray_icon;
             v.ai_changes = settings.ai_changes;
             // OpenRGB and PawnIO against the tested versions, when OpenRGB is
@@ -66,6 +77,15 @@ pub fn run() -> i32 {
             }
             if weak.upgrade_in_event_loop(move |ui| apply(&ui, v)).is_err() {
                 return;
+            }
+            // After the window has its devices, so a slow network never delays
+            // them; what it finds shows on the next refresh.
+            if check_due {
+                last_check = Some(std::time::Instant::now());
+                // A failed check says nothing; the next one tries again.
+                if let Ok(found) = keeplight_core::update::check() {
+                    update = found;
+                }
             }
             match rx.recv_timeout(REFRESH) {
                 Ok(command) => notice = Some(run_command(&command, &engine)),
@@ -123,6 +143,13 @@ pub fn run() -> i32 {
     }
     {
         let tx = tx.clone();
+        let tx4 = tx.clone();
+        g.on_set_update_check(move |on| {
+            let _ = tx4.send(Command::UpdateCheck(on));
+        });
+        g.on_open_update(|url| {
+            crate::platform::open_in_browser(&url);
+        });
         g.on_set_tray_icon(move |on| {
             let _ = tx.send(Command::TrayIcon(on));
         });
@@ -185,6 +212,8 @@ enum Command {
     SignIn(bool),
     /// Show or hide the keeper's icon in the notification area.
     TrayIcon(bool),
+    /// Ask the release feed whether a newer Keeplight is out.
+    UpdateCheck(bool),
     /// "Let AI tools make changes".
     AiChanges(bool),
 }
@@ -340,6 +369,16 @@ fn run_command(command: &Command, engine: &Engine) -> view::Notice {
                 (Err(e), _) => note(format!("Couldn't change the sign-in setting. {e}"), true),
             }
         }
+        Command::UpdateCheck(on) => {
+            let path = crate::platform::settings_path();
+            let mut settings = keeplight_core::settings::Settings::load(&path);
+            settings.no_update_check = !*on;
+            match (settings.save(&path), on) {
+                (Ok(()), true) => note("Keeplight will tell you when a newer version is out.".into(), false),
+                (Ok(()), false) => note("Keeplight won't check for newer versions.".into(), false),
+                (Err(e), _) => note(format!("Couldn't save the update setting. {e}"), true),
+            }
+        }
         Command::TrayIcon(on) => {
             let path = crate::platform::settings_path();
             let mut settings = keeplight_core::settings::Settings::load(&path);
@@ -364,6 +403,10 @@ fn apply(ui: &AppWindow, v: view::View) {
     g.set_sign_in_note(v.sign_in_note.into());
     g.set_last_run(v.last_run.into());
     g.set_tray_icon(v.tray_icon);
+    g.set_update_check(v.update_check);
+    let (update_text, update_url) = v.update.unwrap_or_default();
+    g.set_update_text(update_text.into());
+    g.set_update_url(update_url.into());
     g.set_ai_changes(v.ai_changes);
     g.set_notice(v.notice.into());
     g.set_notice_warn(v.notice_warn);

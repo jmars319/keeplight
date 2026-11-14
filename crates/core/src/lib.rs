@@ -22,6 +22,7 @@ pub mod mcp_server;
 pub mod paths;
 pub mod sdk;
 pub mod settings;
+pub mod update;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

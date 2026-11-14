@@ -88,15 +88,15 @@ pub fn verify(path: &Path, pinned: &Pinned) -> Result<(), InstallError> {
 }
 
 /// Windows' own curl, by full path so nothing on PATH stands in for it.
-fn curl() -> PathBuf {
+pub(crate) fn curl() -> PathBuf {
     let root = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
     root.join("System32").join("curl.exe")
 }
 
 /// The arguments for one download: fail on HTTP errors, follow redirects,
 /// stay on `protocols`, and stop past the pinned size.
-fn curl_args(url: &str, out: &Path, max: u64, protocols: &str) -> Vec<String> {
-    vec![
+pub(crate) fn curl_args(url: &str, out: Option<&Path>, max: u64, protocols: &str) -> Vec<String> {
+    let mut args: Vec<String> = vec![
         "--fail".into(),
         "--silent".into(),
         "--show-error".into(),
@@ -109,10 +109,35 @@ fn curl_args(url: &str, out: &Path, max: u64, protocols: &str) -> Vec<String> {
         max.to_string(),
         "--max-time".into(),
         "600".into(),
-        "--output".into(),
-        out.display().to_string(),
-        url.into(),
-    ]
+    ];
+    if let Some(out) = out {
+        args.extend(["--output".into(), out.display().to_string()]);
+    }
+    args.push(url.into());
+    args
+}
+
+/// Runs Windows' curl with `args` and no console window, and returns its
+/// output, or why it failed.
+pub(crate) fn run_curl(args: Vec<String>) -> Result<Vec<u8>, InstallError> {
+    let curl = curl();
+    if !curl.is_file() {
+        return Err(InstallError::NoCurl(curl));
+    }
+    let mut command = std::process::Command::new(&curl);
+    command.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: the window is a GUI program; no console flashes.
+        command.creation_flags(0x0800_0000);
+    }
+    let output = command.output()?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    let why = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(InstallError::Download(if why.is_empty() { format!("curl exited with {}", output.status) } else { why }))
 }
 
 /// Downloads `pinned` into `dir` and checks it. Returns the checked file.
@@ -121,31 +146,13 @@ pub fn download(pinned: &Pinned, dir: &Path) -> Result<PathBuf, InstallError> {
 }
 
 fn download_from(pinned: &Pinned, url: &str, dir: &Path, protocols: &str) -> Result<PathBuf, InstallError> {
-    let curl = curl();
-    if !curl.is_file() {
-        return Err(InstallError::NoCurl(curl));
-    }
     std::fs::create_dir_all(dir)?;
     let dest = dir.join(pinned.file);
     let part = dir.join(format!("{}.part", pinned.file));
     let _ = std::fs::remove_file(&part);
-    let mut command = std::process::Command::new(&curl);
-    command.args(curl_args(url, &part, pinned.size, protocols));
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW: the window is a GUI program; no console flashes.
-        command.creation_flags(0x0800_0000);
-    }
-    let output = command.output()?;
-    if !output.status.success() {
+    if let Err(e) = run_curl(curl_args(url, Some(&part), pinned.size, protocols)) {
         let _ = std::fs::remove_file(&part);
-        let why = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(InstallError::Download(if why.is_empty() {
-            format!("curl exited with {}", output.status)
-        } else {
-            why
-        }));
+        return Err(e);
     }
     if let Err(e) = verify(&part, pinned) {
         let _ = std::fs::remove_file(&part);
@@ -306,7 +313,7 @@ mod tests {
 
     #[test]
     fn only_https_is_allowed_for_real_downloads() {
-        let args = curl_args("https://codeberg.org/x.msi", Path::new("out"), 10, "https");
+        let args = curl_args("https://codeberg.org/x.msi", Some(Path::new("out")), 10, "https");
         assert!(args.windows(2).any(|w| w == ["--proto", "=https"]));
         assert!(args.windows(2).any(|w| w == ["--proto-redir", "=https"]));
         assert!(args.windows(2).any(|w| w == ["--max-filesize", "10"]));

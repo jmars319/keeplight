@@ -195,6 +195,9 @@ try {
     Check 'switch: AI changes on is saved' (Eventually { AiChanges })
     Click 'Let AI tools make changes'
     Check 'switch: AI changes off is saved' (Eventually { -not (AiChanges) })
+    function NoUpdateCheck { (Test-Path $settings) -and [bool](Get-Content $settings -Raw | ConvertFrom-Json).noUpdateCheck }
+    Click 'Tell me when a new Keeplight is out'
+    Check 'switch: turning the update check off is saved' (Eventually { NoUpdateCheck })
     Check 'the connect lines name keeplight-cli' (Eventually { Has 'Command to connect an AI app: claude mcp add*keeplight-cli.exe" mcp' })
     # Last, since it keeps every device: one color for everything.
     Wheel -20

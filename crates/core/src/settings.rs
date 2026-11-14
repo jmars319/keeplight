@@ -18,6 +18,10 @@ pub struct Settings {
     /// with `ai.changes_off`. Turned on only from the window's Settings.
     #[serde(rename = "aiChanges")]
     pub ai_changes: bool,
+    /// Don't ask the release feed whether a newer Keeplight is out. Off, so
+    /// the window does check, by default; it only ever tells you.
+    #[serde(rename = "noUpdateCheck")]
+    pub no_update_check: bool,
 }
 
 impl Settings {
@@ -47,7 +51,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("settings.json");
         assert_eq!(Settings::load(&path), Settings::default());
-        Settings { tray_icon: true, ai_changes: true }.save(&path).unwrap();
+        Settings { tray_icon: true, ai_changes: true, no_update_check: false }.save(&path).unwrap();
         assert!(Settings::load(&path).tray_icon);
         assert!(std::fs::read_to_string(&path).unwrap().contains("\"aiChanges\": true"), "the fleet's name");
         std::fs::write(&path, "{ nope").unwrap();
@@ -55,5 +59,6 @@ mod tests {
         std::fs::write(&path, "{}").unwrap();
         assert!(!Settings::load(&path).tray_icon, "fields added later default sensibly");
         assert!(!Settings::load(&path).ai_changes, "AI changes are off by default");
+        assert!(!Settings::load(&path).no_update_check, "the update check is on by default");
     }
 }
