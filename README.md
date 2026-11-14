@@ -16,22 +16,23 @@ Early development, nothing released yet. Stage 02, the keeper, is being built:
 - **Shows each device's current color** as a swatch, read back from the device. A device running a lighting mode of its own, such as the keyboard's Onboard mode, shows a spectrum instead, because OpenRGB can't see the colors another app or the device itself is setting.
 - **Says what probably lights each device** ("Lit by: its own memory (Onboard)", "probably SteelSeries GG, which is running", "Keeplight, which keeps it"), from the mode OpenRGB reports and which lighting apps are running, and warns when another app is running that may change a device Keeplight keeps.
 - **Flags devices that cannot store a color themselves**, which go back to their own lighting whenever they lose power.
-- **Keep this** saves what a device shows now into Keeplight's own setup file. Set colors in OpenRGB first; a color picker comes in a later stage.
+- **Color…** on a device opens nine common colors and a `#rrggbb` field. Picking one sets the device to it and keeps it. A device running an effect, like the RAM's Chase Fade, keeps the effect in the new color; one on its own lighting switches to Static, or Direct. **Keep it as before** then goes back to the color it had.
+- **Keep this** saves what a device shows now into Keeplight's own setup file, for a color set somewhere else, such as OpenRGB.
 - **Put back** is on every kept device, highlighted when it shows something else, and sends that one device its kept mode and colors. After a power cut the lights can differ while OpenRGB's record still matches, so it's always there.
 
 - **Put kept lights back when you sign in** starts the keeper, `keeplight --keep`, now and at every sign-in. It has no window. It puts every kept device back when it starts, after the PC wakes, when OpenRGB's device list changes and when OpenRGB comes back after a restart, and logs each run to `%LOCALAPPDATA%\Keeplight\keeper.log`. Off until you turn it on; turning it off stops the keeper.
 
 - **A notification** tells you when the keeper couldn't put a kept device back, once per new problem. **Show the keeper's icon in the notification area** (off by default) keeps an icon there whose menu can open Keeplight or put kept lights back now.
 
-- **Keep it as before** brings back what a device was kept as before you stopped keeping it, and puts it back.
+- **Keep it as before** brings back what a device was kept as before you stopped keeping it or gave it a new color, and puts it back.
 - **Stop keeping** removes a device from the setup (remembering it for Keep it as before) and, if it's in Direct mode and has a built-in "Onboard" mode, hands it back to that, so it isn't left dark.
 - **Keep it dark…** on a device whose lights are all off asks once before keeping it that way.
 
-Stage 02 is complete with these. Setting colors in Keeplight itself comes in stage 03. See the plan page.
+Stage 02 is complete with these. Stage 03 adds colors: one device at a time so far, with colors per zone and one color for everything still to come. See the plan page.
 
 ## AI tools and the command line
 
-`keeplight-cli.exe`, installed beside the app, is Keeplight's command line (`keeplight-cli devices`, `plan`, `apply`, `keep`, `put-back`, `stop-keeping`, `keep-as-before`, `logs`, `diagnose`, `error-codes`, with `--json`) and its MCP server for AI apps such as Claude Code, Gemini CLI and Codex CLI (`keeplight-cli mcp`). AI tools can read and plan; they change nothing unless you turn on "Let AI tools make changes" in the window, and then only what you ask for, planned first and journaled. See [docs/ai.md](docs/ai.md).
+`keeplight-cli.exe`, installed beside the app, is Keeplight's command line (`keeplight-cli devices`, `plan`, `apply`, `keep`, `put-back`, `stop-keeping`, `keep-as-before`, `set-color`, `logs`, `diagnose`, `error-codes`, with `--json`) and its MCP server for AI apps such as Claude Code, Gemini CLI and Codex CLI (`keeplight-cli mcp`). AI tools can read and plan; they change nothing unless you turn on "Let AI tools make changes" in the window, and then only what you ask for, planned first and journaled. See [docs/ai.md](docs/ai.md).
 
 ## Build from source
 

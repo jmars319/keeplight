@@ -45,7 +45,7 @@ Tests against a fake server hold this, including `put_back_all_restores_every_ke
 
 ## Changes from AI tools and the command line
 
-`keeplight-cli` (the command line, and its MCP server `keeplight-cli mcp`, see `docs/ai.md`) offers the same five changes as the window's buttons: keep, keep dark, put back, stop keeping and keep as before, one device at a time, and nothing else. It sends OpenRGB only the requests listed above.
+`keeplight-cli` (the command line, and its MCP server `keeplight-cli mcp`, see `docs/ai.md`) offers the same six changes as the window's buttons: keep, keep dark, put back, stop keeping, keep as before and set a color, one device at a time, and nothing else. A new color goes out as one `UPDATE_MODE` (the device's own mode with the new color, or its Static or Direct mode) and, for a per-light mode, one `UPDATE_LEDS`, then is kept like any other setup; what it replaced is remembered for keep as before. It sends OpenRGB only the requests listed above.
 
 - **Plan, then apply.** Every change from the command line or an AI tool is planned first by the same check that applies it (`agent::check`). A plan records its steps, the setup file's SHA-256 and the device's current mode and colors, expires after 10 minutes and is applied once. Applying refuses when the setup or the device changed since, or when the check now gives different steps.
 - **AI changes are off by default.** "Let AI tools make changes" is stored as `aiChanges` in `settings.json` and turned on only from the window. While off, `apply_plan` is refused with `ai.changes_off`; while on, it still needs the user's request in their own words. The command line needs `--yes` for any change.

@@ -16,7 +16,7 @@ Agent-facing working state. The plan page is the owner-facing view; this file ho
 ## Current Structural Milestones / Active Feature Goals
 
 - Done: stage 02, the keeper (#8 to #12, owner's tests passed 2026-11-13); follow-ups #14 (Keep it as before), #15 (Lit by), #16 (agent-interface kit pilot); stage 04, the stopgap retired (2026-11-13, below).
-- Next: stage 03, one-click colors (swatch and picker per device and zone, "set everything"). It also closes the gap where "Keep this" after Stop keeping captures Onboard, not red.
+- Now: stage 03, one-click colors, in three PRs (owner go 2026-11-13): (1) a color per device in the window, command line and AI tools, branch `feat/set-color`; (2) colors per zone; (3) "set everything". Owner decisions 2026-11-13: a new color keeps the device's effect when its mode takes colors (red Chase Fade becomes blue Chase Fade), otherwise switches to Static, then Direct (`Kept::colored`); AI tools and the command line may set colors under the same rules (`setColor`, `aiChanges`, plan first). A new color remembers what it replaced in `Setup.before`, and Keep it as before on a kept device swaps the two (undo and redo).
 - Settled for stage 02: choosing what to keep = per-device "Keep this" of what it shows now (colors still set in OpenRGB until stage 03); no tray icon by default, notification only on failure, tray icon optional in Settings; first release deferred: owner said 2026-11-13 to hold off on releases (no code signing yet), so stage 02 ends without a release and the keeper reaches JASON-PC by local installs from main (`scripts/package.ps1`, then the setup exe with `/VERYSILENT`).
 
 ## Active Task State & Known Regressions
@@ -45,7 +45,7 @@ Agent-facing working state. The plan page is the owner-facing view; this file ho
 - Never send `SAVEMODE` (1102) or any profile request.
 - Never keep a device whose lights are all off without asking first ("Keep it dark…").
 - Real-light tests: one device at a time, to its current state, with a throwaway setup file. Never load an OpenRGB profile for testing.
-- Changes from AI tools need `aiChanges` on (only the window turns it on), a plan first, and a request; never add a tool that sets colors, switches the keeper or changes a setting.
+- Changes from AI tools need `aiChanges` on (only the window turns it on), a plan first, and a request; setColor is the only change that sets a color; never add a tool that switches the keeper or changes a setting.
 
 ## Context Compaction Checklist
 

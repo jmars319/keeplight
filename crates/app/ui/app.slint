@@ -18,6 +18,8 @@ export struct DeviceRow {
     dark: bool,
     // It was kept before you stopped keeping it: "Keep it as before".
     has-before: bool,
+    // One of its modes takes a color: the row offers "Color…".
+    can-color: bool,
     // It runs a lighting mode of its own, so its colors are unknown.
     own-lighting: bool,
     // What probably lights it, after "Lit by: "; warn when another app may
@@ -54,6 +56,8 @@ export global Ui {
     callback keep-dark(DeviceRow);
     callback stop-keeping(DeviceRow);
     callback keep-as-before(DeviceRow);
+    // A color as #rrggbb, set and kept.
+    callback set-color(DeviceRow, string);
     // The keeper at sign-in.
     in-out property <bool> sign-in;
     in property <string> sign-in-note;
@@ -110,6 +114,80 @@ component Swatch inherits Rectangle {
     accessible-role: none;
 }
 
+// One-click colors for a device: common colors, or any #rrggbb. Picking one
+// sets it and keeps it.
+component ColorDot inherits Rectangle {
+    in property <color> fill;
+    in property <string> label;
+    callback picked();
+    width: 26px;
+    height: 26px;
+    border-radius: self.width / 2;
+    background: root.fill;
+    border-width: touch.has-hover ? 2px : 1px;
+    border-color: touch.has-hover ? Theme.text : Theme.surface-border;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.picked(); }
+    touch := TouchArea {
+        enabled: !Ui.busy;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+component ColorPicker inherits HorizontalLayout {
+    in property <DeviceRow> item;
+    callback done();
+    spacing: 8px;
+    alignment: start;
+    for c in [
+        { fill: #ff0000, hex: "#ff0000", name: "red" },
+        { fill: #ff6a00, hex: "#ff6a00", name: "orange" },
+        { fill: #ffd200, hex: "#ffd200", name: "yellow" },
+        { fill: #00ff40, hex: "#00ff40", name: "green" },
+        { fill: #00e5ff, hex: "#00e5ff", name: "cyan" },
+        { fill: #0050ff, hex: "#0050ff", name: "blue" },
+        { fill: #8a2be2, hex: "#8a2be2", name: "purple" },
+        { fill: #ff2d95, hex: "#ff2d95", name: "pink" },
+        { fill: #ffffff, hex: "#ffffff", name: "white" },
+    ]: VerticalLayout {
+        alignment: center;
+        ColorDot {
+            fill: c.fill;
+            label: "Set " + root.item.name + " to " + c.name;
+            picked => {
+                Ui.set-color(root.item, c.hex);
+                root.done();
+            }
+        }
+    }
+    hex := LineEdit {
+        placeholder-text: "#rrggbb";
+        width: 100px;
+        font-size: 12px;
+        accessible-label: "Color for " + root.item.name + " as #rrggbb";
+        accepted => {
+            Ui.set-color(root.item, self.text);
+            root.done();
+        }
+    }
+    Button {
+        text: "Set";
+        enabled: !Ui.busy && hex.text != "";
+        accessible-label: "Set " + root.item.name + " to the color typed";
+        clicked => {
+            Ui.set-color(root.item, hex.text);
+            root.done();
+        }
+    }
+    Button {
+        text: "Cancel";
+        accessible-label: "Close the colors for " + root.item.name;
+        clicked => { root.done(); }
+    }
+}
+
 component DeviceRowView inherits Rectangle {
     in property <DeviceRow> item;
     // Showing "Keep every light off?" for a dark device.
@@ -127,144 +205,159 @@ component DeviceRowView inherits Rectangle {
         + (root.item.status-text != "" ? " " + root.item.status-text : "")
         + (root.item.lit-by != "" ? " Lit by " + root.item.lit-by + "." : "");
 
-    content := HorizontalLayout {
+    // Showing the color picker under the row.
+    property <bool> picking;
+    content := VerticalLayout {
         padding-left: 16px;
         padding-right: 16px;
         padding-top: 12px;
         padding-bottom: 12px;
-        spacing: 16px;
-        VerticalLayout {
-            alignment: center;
-            Swatch {
-                lit: root.item.lit;
-                own: root.item.own-lighting;
-                fill: root.item.swatch;
-            }
-        }
-        VerticalLayout {
-            alignment: center;
-            spacing: 2px;
-            horizontal-stretch: 1;
-            HorizontalLayout {
-                spacing: 10px;
-                Text {
-                    text: root.item.name;
-                    font-size: 14px;
-                    font-weight: 600;
-                    color: Theme.text;
-                    overflow: elide;
-                    horizontal-stretch: 0;
-                    accessible-role: none;
-                }
-                Text {
-                    text: root.item.product;
-                    font-size: 12px;
-                    color: Theme.secondary-text;
-                    overflow: elide;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    accessible-role: none;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 16px;
+            VerticalLayout {
+                alignment: center;
+                Swatch {
+                    lit: root.item.lit;
+                    own: root.item.own-lighting;
+                    fill: root.item.swatch;
                 }
             }
-            Text {
-                text: root.item.meta;
-                font-size: 12px;
-                font-family: Theme.font-mono;
-                color: Theme.secondary-text;
-                overflow: elide;
-                accessible-role: none;
-            }
-            if root.item.zones != "": Text {
-                text: root.item.zones;
-                font-size: 12px;
-                color: Theme.secondary-text;
-                wrap: word-wrap;
-                accessible-role: none;
-            }
-            if root.item.note != "": Text {
-                text: root.item.note;
-                font-size: 12px;
-                color: Theme.warning;
-                wrap: word-wrap;
-                accessible-role: none;
-            }
-            if root.item.lit-by != "": Text {
-                text: "Lit by: " + root.item.lit-by;
-                font-size: 12px;
-                color: root.item.lit-by-warn ? Theme.warning : Theme.secondary-text;
-                wrap: word-wrap;
-                accessible-role: none;
-            }
-            if root.item.status-text != "": Text {
-                text: root.item.status-text;
-                font-size: 12px;
-                color: root.item.status == "kept" ? Theme.ready
-                    : root.item.status == "" ? Theme.secondary-text : Theme.warning;
-                wrap: word-wrap;
-                accessible-role: none;
-            }
-        }
-        VerticalLayout {
-            alignment: center;
-            spacing: 6px;
-            if root.item.status == "" && root.item.has-before: Button {
-                text: "Keep it as before";
-                primary: true;
-                enabled: !Ui.busy;
-                accessible-label: "Keep " + root.item.name + " as before";
-                clicked => { Ui.keep-as-before(root.item); }
-            }
-            // On every kept device: after a power cut the lights can differ
-            // while OpenRGB's record still matches.
-            if root.item.status != "": Button {
-                text: "Put back";
-                primary: root.item.status == "differs";
-                enabled: !Ui.busy;
-                accessible-label: "Put back " + root.item.name;
-                clicked => { Ui.put-back(root.item); }
-            }
-            if root.item.status != "kept" && !(root.confirm-dark && root.item.dark): Button {
-                text: root.item.dark ? "Keep it dark…" : root.item.status == "" ? "Keep this" : "Keep this instead";
-                enabled: root.item.can-keep && !Ui.busy;
-                accessible-label: (root.item.status == "" ? "Keep " : "Keep what this shows now, ") + root.item.name;
-                clicked => {
-                    if (root.item.dark) {
-                        root.confirm-dark = true;
-                    } else {
-                        Ui.keep(root.item);
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: root.item.name;
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: Theme.text;
+                        overflow: elide;
+                        horizontal-stretch: 0;
+                        accessible-role: none;
+                    }
+                    Text {
+                        text: root.item.product;
+                        font-size: 12px;
+                        color: Theme.secondary-text;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        accessible-role: none;
                     }
                 }
-            }
-            // Asking before keeping a device dark (owner rule, 2026-10-23).
-            // The question only stands while the device is still dark.
-            if root.confirm-dark && root.item.dark: Text {
-                text: "Keep every light off, even after sleep?";
-                font-size: 12px;
-                color: Theme.warning;
-                wrap: word-wrap;
-                max-width: 180px;
-            }
-            if root.confirm-dark && root.item.dark: Button {
-                text: "Keep it dark";
-                primary: true;
-                enabled: !Ui.busy;
-                accessible-label: "Keep " + root.item.name + " dark";
-                clicked => {
-                    root.confirm-dark = false;
-                    Ui.keep-dark(root.item);
+                Text {
+                    text: root.item.meta;
+                    font-size: 12px;
+                    font-family: Theme.font-mono;
+                    color: Theme.secondary-text;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+                if root.item.zones != "": Text {
+                    text: root.item.zones;
+                    font-size: 12px;
+                    color: Theme.secondary-text;
+                    wrap: word-wrap;
+                    accessible-role: none;
+                }
+                if root.item.note != "": Text {
+                    text: root.item.note;
+                    font-size: 12px;
+                    color: Theme.warning;
+                    wrap: word-wrap;
+                    accessible-role: none;
+                }
+                if root.item.lit-by != "": Text {
+                    text: "Lit by: " + root.item.lit-by;
+                    font-size: 12px;
+                    color: root.item.lit-by-warn ? Theme.warning : Theme.secondary-text;
+                    wrap: word-wrap;
+                    accessible-role: none;
+                }
+                if root.item.status-text != "": Text {
+                    text: root.item.status-text;
+                    font-size: 12px;
+                    color: root.item.status == "kept" ? Theme.ready
+                        : root.item.status == "" ? Theme.secondary-text : Theme.warning;
+                    wrap: word-wrap;
+                    accessible-role: none;
                 }
             }
-            if root.confirm-dark && root.item.dark: Button {
-                text: "Cancel";
-                accessible-label: "Don't keep " + root.item.name + " dark";
-                clicked => { root.confirm-dark = false; }
+            VerticalLayout {
+                alignment: center;
+                spacing: 6px;
+                if root.item.can-color && !root.picking: Button {
+                    text: "Color…";
+                    enabled: !Ui.busy;
+                    accessible-label: "Choose a color for " + root.item.name;
+                    clicked => { root.picking = true; }
+                }
+                if root.item.has-before: Button {
+                    text: "Keep it as before";
+                    primary: root.item.status == "";
+                    enabled: !Ui.busy;
+                    accessible-label: "Keep " + root.item.name + " as before";
+                    clicked => { Ui.keep-as-before(root.item); }
+                }
+                // On every kept device: after a power cut the lights can differ
+                // while OpenRGB's record still matches.
+                if root.item.status != "": Button {
+                    text: "Put back";
+                    primary: root.item.status == "differs";
+                    enabled: !Ui.busy;
+                    accessible-label: "Put back " + root.item.name;
+                    clicked => { Ui.put-back(root.item); }
+                }
+                if root.item.status != "kept" && !(root.confirm-dark && root.item.dark): Button {
+                    text: root.item.dark ? "Keep it dark…" : root.item.status == "" ? "Keep this" : "Keep this instead";
+                    enabled: root.item.can-keep && !Ui.busy;
+                    accessible-label: (root.item.status == "" ? "Keep " : "Keep what this shows now, ") + root.item.name;
+                    clicked => {
+                        if (root.item.dark) {
+                            root.confirm-dark = true;
+                        } else {
+                            Ui.keep(root.item);
+                        }
+                    }
+                }
+                // Asking before keeping a device dark (owner rule, 2026-10-23).
+                // The question only stands while the device is still dark.
+                if root.confirm-dark && root.item.dark: Text {
+                    text: "Keep every light off, even after sleep?";
+                    font-size: 12px;
+                    color: Theme.warning;
+                    wrap: word-wrap;
+                    max-width: 180px;
+                }
+                if root.confirm-dark && root.item.dark: Button {
+                    text: "Keep it dark";
+                    primary: true;
+                    enabled: !Ui.busy;
+                    accessible-label: "Keep " + root.item.name + " dark";
+                    clicked => {
+                        root.confirm-dark = false;
+                        Ui.keep-dark(root.item);
+                    }
+                }
+                if root.confirm-dark && root.item.dark: Button {
+                    text: "Cancel";
+                    accessible-label: "Don't keep " + root.item.name + " dark";
+                    clicked => { root.confirm-dark = false; }
+                }
+                if root.item.status != "": Button {
+                    text: "Stop keeping";
+                    enabled: !Ui.busy;
+                    accessible-label: "Stop keeping " + root.item.name;
+                    clicked => { Ui.stop-keeping(root.item); }
+                }
             }
-            if root.item.status != "": Button {
-                text: "Stop keeping";
-                enabled: !Ui.busy;
-                accessible-label: "Stop keeping " + root.item.name;
-                clicked => { Ui.stop-keeping(root.item); }
-            }
+        }
+        if root.picking: ColorPicker {
+            item: root.item;
+            done => { root.picking = false; }
         }
     }
 }
@@ -438,7 +531,7 @@ export component AppWindow inherits Window {
             padding-top: 8px;
             padding-bottom: 12px;
             Text {
-                text: "Keeplight changes a light only when you press Put back, and at sign-in when the switch above is on. Version " + Ui.version + ".";
+                text: "Keeplight changes a light only when you press Put back or pick a color, and at sign-in, after sleep and when OpenRGB's devices change while the switch above is on. Version " + Ui.version + ".";
                 font-size: 11px;
                 color: Theme.secondary-text;
                 wrap: word-wrap;

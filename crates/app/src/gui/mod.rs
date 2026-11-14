@@ -84,6 +84,16 @@ pub fn run() -> i32 {
     g.on_keep_as_before(send(Command::KeepAsBefore));
     {
         let tx = tx.clone();
+        let weak = ui.as_weak();
+        g.on_set_color(move |row, color| {
+            if let Some(ui) = weak.upgrade() {
+                ui.global::<Ui>().set_busy(true);
+            }
+            let _ = tx.send(Command::SetColor(row, color.to_string()));
+        });
+    }
+    {
+        let tx = tx.clone();
         g.on_set_sign_in(move |on| {
             let _ = tx.send(Command::SignIn(on));
         });
@@ -126,6 +136,8 @@ enum Command {
     StopKeeping(DeviceRow),
     /// Keep a device again as it was before you stopped keeping it.
     KeepAsBefore(DeviceRow),
+    /// Set a device to a color (#rrggbb) and keep it.
+    SetColor(DeviceRow, String),
     /// Turn the keeper at sign-in on or off.
     SignIn(bool),
     /// Show or hide the keeper's icon in the notification area.
@@ -137,9 +149,15 @@ enum Command {
 /// A device button: the engine checks and makes the change, logs it as
 /// `gui`, and says what happened; this words it for the notice line.
 fn device_change(engine: &Engine, action: Action, row: &DeviceRow) -> view::Notice {
+    color_change(engine, Change::new(action, row.location_key.to_string()), row)
+}
+
+/// [device_change] for any change, including a new color.
+fn color_change(engine: &Engine, change: Change, row: &DeviceRow) -> view::Notice {
     let note = |text: String, warn: bool| view::Notice { text, warn };
     let name = &row.name;
-    let applied = match engine.change_now(&Caller::Window, Change { action, device: row.location_key.to_string() }) {
+    let action = change.action;
+    let applied = match engine.change_now(&Caller::Window, change) {
         Ok(a) => a,
         Err(e) => {
             let what = match action {
@@ -147,6 +165,7 @@ fn device_change(engine: &Engine, action: Action, row: &DeviceRow) -> view::Noti
                 Action::PutBack => "put back",
                 Action::StopKeeping => "stop keeping",
                 Action::KeepAsBefore => "keep as before",
+                Action::SetColor => "set the color of",
             };
             return note(format!("Couldn't {what} {name}. {}", e.message), true);
         }
@@ -161,6 +180,13 @@ fn device_change(engine: &Engine, action: Action, row: &DeviceRow) -> view::Noti
                 true,
             ),
             Outcome::Skipped(reason) => note(format!("Keeping {name} as before, but didn't send it: {reason}."), true),
+        },
+        (_, Some(Effect::ColorSet(o))) => match o {
+            Outcome::Held => {
+                note(format!("{}. The keeper keeps it that way.", applied.result.trim_end_matches('.')), false)
+            }
+            Outcome::NotHeld => note(format!("{} Another program may be setting it.", applied.result), true),
+            Outcome::Skipped(_) => note(applied.result, true),
         },
         (_, Some(Effect::PutBack(o))) => match o {
             Outcome::Held => note(format!("Put {name} back."), false),
@@ -203,6 +229,9 @@ fn run_command(command: &Command, engine: &Engine) -> view::Notice {
         Command::PutBack(row) => device_change(engine, Action::PutBack, row),
         Command::StopKeeping(row) => device_change(engine, Action::StopKeeping, row),
         Command::KeepAsBefore(row) => device_change(engine, Action::KeepAsBefore, row),
+        Command::SetColor(row, color) => {
+            color_change(engine, Change::set_color(row.location_key.to_string(), color.clone()), row)
+        }
         Command::AiChanges(on) => match (engine.set_ai_changes(*on), on) {
             (Ok(()), true) => note(
                 "AI tools you connect can now change what Keeplight keeps and put lights back, when you ask them to."
@@ -284,6 +313,7 @@ fn apply(ui: &AppWindow, v: view::View) {
             can_keep: r.can_keep,
             dark: r.dark,
             has_before: r.has_before,
+            can_color: r.can_color,
             own_lighting: r.own_lighting,
             lit_by: r.lit_by.into(),
             lit_by_warn: r.lit_by_warn,
