@@ -1,5 +1,5 @@
 //! A fake OpenRGB SDK server for the smoke tests: two RAM sticks and a
-//! keyboard, all red, and a motherboard with every light off, that accept
+//! keyboard, all red, and a two-zone motherboard with every light off, that accept
 //! Keeplight's requests without any real lights. Prints its address on the
 //! first line, then serves until killed.
 //!
@@ -11,6 +11,11 @@ fn main() {
     let bind = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:0".into());
     let mut dark_board = testing::board();
     dark_board.modes[1].colors = vec![keeplight_core::device::Rgb::default()];
+    // Two zones, so the window shows a swatch per zone and a zone choice.
+    dark_board.zones = vec![
+        keeplight_core::device::Zone { name: "Board".into(), led_count: 2, matrix: None },
+        keeplight_core::device::Zone { name: "Header 1".into(), led_count: 2, matrix: None },
+    ];
     let server = FakeServer::start_on(
         &bind,
         vec![testing::ram("SMBus 0x71"), testing::ram("SMBus 0x73"), testing::keyboard(RED), dark_board],

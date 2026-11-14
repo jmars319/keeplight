@@ -13,10 +13,10 @@ Keeplight is an independent project. It is not affiliated with OpenRGB or any ha
 Early development, nothing released yet. Stage 02, the keeper, is being built:
 
 - **Lists every device OpenRGB reports**, by plain name ("RAM stick 2", "Graphics card"), with the product name, light count, current effect and zones.
-- **Shows each device's current color** as a swatch, read back from the device. A device running a lighting mode of its own, such as the keyboard's Onboard mode, shows a spectrum instead, because OpenRGB can't see the colors another app or the device itself is setting.
+- **Shows each device's current color** as a swatch, and each zone's when it has several, read back from the device. A device running a lighting mode of its own, such as the keyboard's Onboard mode, shows a spectrum instead, because OpenRGB can't see the colors another app or the device itself is setting.
 - **Says what probably lights each device** ("Lit by: its own memory (Onboard)", "probably SteelSeries GG, which is running", "Keeplight, which keeps it"), from the mode OpenRGB reports and which lighting apps are running, and warns when another app is running that may change a device Keeplight keeps.
 - **Flags devices that cannot store a color themselves**, which go back to their own lighting whenever they lose power.
-- **Color…** on a device opens nine common colors and a `#rrggbb` field. Picking one sets the device to it and keeps it. A device running an effect, like the RAM's Chase Fade, keeps the effect in the new color; one on its own lighting switches to Static, or Direct. **Keep it as before** then goes back to the color it had.
+- **Color…** on a device opens nine common colors and a `#rrggbb` field. Picking one sets the device to it and keeps it. A device running an effect, like the RAM's Chase Fade, keeps the effect in the new color; one on its own lighting switches to Static, or Direct. **Keep it as before** then goes back to the color it had. A device with several zones, such as the motherboard's headers, shows a swatch per zone, and the picker can color one zone on its own.
 - **Keep this** saves what a device shows now into Keeplight's own setup file, for a color set somewhere else, such as OpenRGB.
 - **Put back** is on every kept device, highlighted when it shows something else, and sends that one device its kept mode and colors. After a power cut the lights can differ while OpenRGB's record still matches, so it's always there.
 
@@ -28,7 +28,7 @@ Early development, nothing released yet. Stage 02, the keeper, is being built:
 - **Stop keeping** removes a device from the setup (remembering it for Keep it as before) and, if it's in Direct mode and has a built-in "Onboard" mode, hands it back to that, so it isn't left dark.
 - **Keep it dark…** on a device whose lights are all off asks once before keeping it that way.
 
-Stage 02 is complete with these. Stage 03 adds colors: one device at a time so far, with colors per zone and one color for everything still to come. See the plan page.
+Stage 02 is complete with these. Stage 03 adds colors: per device and per zone so far, with one color for everything still to come. See the plan page.
 
 ## AI tools and the command line
 

@@ -15,7 +15,7 @@ keeplight-cli devices                    every device, and how it stands against
 keeplight-cli plan <action> <device>     check a change and save it as a plan; changes nothing else
 keeplight-cli apply <plan id> --yes      apply a saved plan once
 keeplight-cli <action> <device> --yes    plan and apply a change at once
-keeplight-cli set-color <device> <color> --yes   set a device to #rrggbb and keep it (also with plan)
+keeplight-cli set-color <device> <color> [--zone <zone>] --yes   set a device, or one zone, to #rrggbb and keep it (also with plan)
 keeplight-cli logs [--limit N]           the newest events
 keeplight-cli diagnose                   everything for working out a problem, redacted (JSON)
 keeplight-cli error-codes                every error code
@@ -52,13 +52,25 @@ fn usage(message: impl Into<String>) -> AgentError {
     AgentError::new(codes::USAGE, format!("{} Run `keeplight-cli help` for the commands.", message.into()))
 }
 
-fn change(action: &str, device: Option<&String>, color: Option<&String>) -> Result<Change, AgentError> {
+fn change(
+    action: &str,
+    device: Option<&String>,
+    color: Option<&String>,
+    zone: Option<&String>,
+) -> Result<Change, AgentError> {
     let action =
         Action::from_word(action).ok_or_else(|| usage(format!("There is no action \u{201c}{action}\u{201d}.")))?;
     let device = device.ok_or_else(|| usage(format!("Name a device for {}.", action.word())))?;
     if action == Action::SetColor {
         let color = color.ok_or_else(|| usage("Name a color for set-color, such as #0050ff."))?;
-        return Ok(Change::set_color(device.clone(), color.clone()));
+        let change = Change::set_color(device.clone(), color.clone());
+        return Ok(match zone {
+            Some(z) => change.in_zone(z.clone()),
+            None => change,
+        });
+    }
+    if zone.is_some() {
+        return Err(usage("--zone goes only with set-color."));
     }
     Ok(Change::new(action, device.clone()))
 }
@@ -68,6 +80,7 @@ fn parse(raw: &[String]) -> Result<Args, AgentError> {
     let yes = raw.iter().any(|a| a == "--yes");
     let mut words: Vec<String> = Vec::new();
     let mut limit = 50;
+    let mut zone: Option<String> = None;
     let mut i = 0;
     while i < raw.len() {
         match raw[i].as_str() {
@@ -75,6 +88,10 @@ fn parse(raw: &[String]) -> Result<Args, AgentError> {
             "--limit" => {
                 i += 1;
                 limit = raw.get(i).and_then(|n| n.parse().ok()).ok_or_else(|| usage("--limit needs a number."))?;
+            }
+            "--zone" => {
+                i += 1;
+                zone = Some(raw.get(i).cloned().ok_or_else(|| usage("--zone needs a zone name or id."))?);
             }
             "--help" | "-h" | "/?" => words.insert(0, "help".into()),
             "--version" | "-V" => words.insert(0, "version".into()),
@@ -91,13 +108,13 @@ fn parse(raw: &[String]) -> Result<Args, AgentError> {
         "devices" => Command::Devices,
         "plan" => {
             let action = words.get(1).ok_or_else(|| usage("Name an action to plan."))?;
-            Command::Plan(change(action, words.get(2), words.get(3))?)
+            Command::Plan(change(action, words.get(2), words.get(3), zone.as_ref())?)
         }
         "apply" => Command::Apply(words.get(1).cloned().ok_or_else(|| usage("Name the plan id to apply."))?),
         "logs" => Command::Logs(limit.min(500)),
         "diagnose" => Command::Diagnose,
         "error-codes" => Command::ErrorCodes,
-        action => Command::Change(change(action, words.get(1), words.get(2))?),
+        action => Command::Change(change(action, words.get(1), words.get(2), zone.as_ref())?),
     };
     let changes = matches!(command, Command::Apply(_) | Command::Change(_));
     if changes && !yes {
@@ -262,6 +279,10 @@ mod tests {
             args("plan set-color ram-stick-2 00ff00").unwrap().command,
             Command::Plan(Change::set_color("ram-stick-2", "00ff00"))
         );
+        assert_eq!(
+            args("set-color motherboard #00ff00 --zone addressable-rgb-header-1 --yes").unwrap().command,
+            Command::Change(Change::set_color("motherboard", "#00ff00").in_zone("addressable-rgb-header-1"))
+        );
         assert_eq!(args("logs --limit 5").unwrap().command, Command::Logs(5));
         assert_eq!(args("logs --limit 9999").unwrap().command, Command::Logs(500));
         assert_eq!(args("mcp").unwrap().command, Command::Mcp);
@@ -277,6 +298,8 @@ mod tests {
             "--nope",
             "logs --limit x",
             "set-color keyboard --yes",
+            "keep keyboard --zone x --yes",
+            "set-color keyboard #ff0000 --zone",
         ] {
             let e = args(line).unwrap_err();
             assert_eq!(e.code, codes::USAGE, "{line}");

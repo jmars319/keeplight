@@ -114,12 +114,25 @@ pub struct Row {
     pub has_before: bool,
     /// One of its modes takes a color, so the color picker can set it.
     pub can_color: bool,
+    /// Each zone with its color, when there is more than one zone.
+    pub zone_items: Vec<ZoneItem>,
+    /// The picker can color one zone on its own.
+    pub can_color_zones: bool,
     /// It runs a lighting mode of its own, so its colors are unknown.
     pub own_lighting: bool,
     /// What probably lights it, after "Lit by: ".
     pub lit_by: String,
     /// Another running app may fight Keeplight over it.
     pub lit_by_warn: bool,
+}
+
+/// One zone of a device, for a swatch and the picker's zone choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneItem {
+    pub name: String,
+    /// Its name and light count, such as "Board (4)".
+    pub label: String,
+    pub swatch: Option<(u8, u8, u8)>,
 }
 
 /// The saved setup as the window sees it: read, or the reason it couldn't be.
@@ -213,6 +226,19 @@ fn rows(devices: &[Device], setup: Option<&Setup>, running: &[String]) -> Vec<Ro
             } else {
                 String::new()
             };
+            let zone_items: Vec<ZoneItem> = if d.zones.len() > 1 {
+                d.zones
+                    .iter()
+                    .enumerate()
+                    .map(|(i, z)| ZoneItem {
+                        name: z.name.clone(),
+                        label: format!("{} ({})", z.name, z.led_count),
+                        swatch: d.zone_color(i).map(|c| (c.r, c.g, c.b)),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let note = if d.can_store_color() {
                 String::new()
             } else {
@@ -270,6 +296,12 @@ fn rows(devices: &[Device], setup: Option<&Setup>, running: &[String]) -> Vec<Ro
                 has_before: before.is_some(),
                 can_color: setup.is_some_and(|s| keeplight_core::keep::undo_for(s, d).is_ok())
                     && Kept::colored(d, Rgb { r: 255, g: 255, b: 255 }).is_ok(),
+                can_color_zones: zone_items.len() > 1
+                    && setup.is_some_and(|s| {
+                        keeplight_core::keep::undo_for(s, d).is_ok()
+                            && Kept::colored_zone(d, s.find(d), 0, Rgb { r: 255, g: 255, b: 255 }).is_ok()
+                    }),
+                zone_items,
             }
         })
         .collect()
@@ -406,9 +438,15 @@ mod tests {
             Zone { name: "Board".into(), led_count: 4, matrix: None },
             Zone { name: "Header 1".into(), led_count: 2, matrix: None },
         ];
+        d.colors[4..].fill(Rgb::default());
         let v = build(&snap(vec![d]), &empty(), "a", None, &[]);
         assert_eq!(v.rows[0].zones, "Board 4 · Header 1 2");
         assert_eq!(v.summary, "1 device · 6 lights");
+        // A swatch per zone, the dark one hollow, and the picker can color one.
+        let zones = &v.rows[0].zone_items;
+        assert_eq!((zones[0].label.as_str(), zones[0].swatch), ("Board (4)", Some((255, 0, 0))));
+        assert_eq!((zones[1].name.as_str(), zones[1].swatch), ("Header 1", None));
+        assert!(v.rows[0].can_color_zones);
     }
 
     #[test]

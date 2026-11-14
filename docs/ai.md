@@ -36,7 +36,7 @@ A change is one action on one device:
 | `putBack` | Send a kept device its kept setup. |
 | `stopKeeping` | Stop keeping it. A device in Direct mode with an Onboard mode is handed back to that, so it isn't left dark. |
 | `keepAsBefore` | Go back to the setup it had before the last `stopKeeping` or `setColor`, and send it that. On a kept device the two swap, so doing it again redoes the change. |
-| `setColor` | Set the device to `color` (`#rrggbb`) and keep it. A mode that takes colors keeps its effect in the new color (red Chase Fade becomes blue Chase Fade); a mode that doesn't, such as Onboard or a rainbow, switches to Static, or Direct. Black is refused: use `keepDark`. |
+| `setColor` | Set the device to `color` (`#rrggbb`) and keep it. A mode that takes colors keeps its effect in the new color (red Chase Fade becomes blue Chase Fade); a mode that doesn't, such as Onboard or a rainbow, switches to Static, or Direct. Black is refused: use `keepDark`. With `zone` (a zone id from `get_devices`, such as `addressable-rgb-header-1`), only that zone changes: the device stays in, or switches to, a mode that colors each light (Direct), and its other zones keep their kept colors. |
 
 For one color on the whole PC, plan a `setColor` for each device. Nothing an AI app can do is irreversible: every action can be undone by another, and a new color by `keepAsBefore`.
 
