@@ -21,7 +21,7 @@ Each line is that app's own command for adding a server, and it changes only tha
 | Tool | What it does | Changes anything |
 | --- | --- | --- |
 | `get_devices` | Every device: id, name, mode, color, whether it's dark or on its own lighting, whether Keeplight keeps it and as what, what it was kept as before, and what probably lights it. | No |
-| `get_logs` | The newest events: every change, who made it (`gui`, `cli`, `mcp:<app>` or `keeper`), and every failure with its code. | No |
+| `get_logs` | The newest events: every change, who made it (`gui`, `cli`, `mcp:<app>` or `background:keeper`), and every failure with its code. | No |
 | `diagnose` | All of it at once for working out a problem, with your user folder written as `~`. | No |
 | `list_error_codes` | Every error code, what it means and what to do. | No |
 | `plan_change` | Checks one change and returns a plan: its steps in plain words and a `planId`. | No (it saves the plan for 10 minutes) |

@@ -33,7 +33,7 @@ use sha2::{Digest, Sha256};
 
 /// The kit's version. Raised with every change to this folder, so a copy's
 /// version says which reference it came from.
-pub const KIT_VERSION: &str = "1";
+pub const KIT_VERSION: &str = "3";
 
 /// Milliseconds since 1970 (UTC).
 pub fn now_ms() -> u64 {

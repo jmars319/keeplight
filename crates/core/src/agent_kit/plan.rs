@@ -12,7 +12,20 @@
 //! one rename, so it is applied once even when two processes race.
 //!
 //! Plans past their time are deleted when the next plan is saved.
+//!
+//! Two rules the app keeps, which the kit cannot check for it:
+//!
+//! - **Hold the app's own write lock from `take` through the write.** Take
+//!   it before calling [`PlanStore::take`] and release it after the write and
+//!   the journal entry, so nothing (the window, a background task, another
+//!   command line) can change the state between the recheck and the write.
+//! - **Pin a plan to a stable identity, never a position.** A precondition's
+//!   key and the payload name a resource by something that cannot change
+//!   under it (a serial, a path, a database id), never an index or list
+//!   position: a device list can reorder identical devices between the plan
+//!   and the apply, and the plan would then change the wrong one.
 
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
@@ -153,21 +166,35 @@ fn not_found(plan_id: &str) -> AgentError {
     )
 }
 
-/// The app's `plans` folder.
-#[derive(Debug, Clone)]
-pub struct PlanStore {
+/// The app's `plans` folder, for plans whose payload is `P`. Naming the
+/// payload type once here lets every `take` call infer its recheck closure's
+/// argument (`|p| recheck(&p.payload)`).
+pub struct PlanStore<P> {
     dir: PathBuf,
     schema_version: u32,
     lifetime_ms: u64,
+    payload: PhantomData<fn() -> P>,
 }
 
-impl PlanStore {
-    pub fn new(dir: impl Into<PathBuf>, schema_version: u32) -> PlanStore {
-        PlanStore { dir: dir.into(), schema_version, lifetime_ms: PLAN_LIFETIME_MS }
+impl<P> Clone for PlanStore<P> {
+    fn clone(&self) -> PlanStore<P> {
+        PlanStore { dir: self.dir.clone(), ..*self }
+    }
+}
+
+impl<P> std::fmt::Debug for PlanStore<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlanStore").field("dir", &self.dir).field("lifetime_ms", &self.lifetime_ms).finish()
+    }
+}
+
+impl<P: Serialize + DeserializeOwned> PlanStore<P> {
+    pub fn new(dir: impl Into<PathBuf>, schema_version: u32) -> PlanStore<P> {
+        PlanStore { dir: dir.into(), schema_version, lifetime_ms: PLAN_LIFETIME_MS, payload: PhantomData }
     }
 
     /// Only for tests: the fleet's plans live 10 minutes.
-    pub fn with_lifetime_ms(mut self, lifetime_ms: u64) -> PlanStore {
+    pub fn with_lifetime_ms(mut self, lifetime_ms: u64) -> PlanStore<P> {
         self.lifetime_ms = lifetime_ms;
         self
     }
@@ -181,22 +208,11 @@ impl PlanStore {
     }
 
     /// Saves a plan. Making a plan changes nothing else.
-    pub fn save<P: Serialize + DeserializeOwned>(
-        &self,
-        target: &str,
-        payload: P,
-        preconditions: Vec<Precondition>,
-    ) -> Result<Plan<P>> {
+    pub fn save(&self, target: &str, payload: P, preconditions: Vec<Precondition>) -> Result<Plan<P>> {
         self.save_at(target, payload, preconditions, now_ms())
     }
 
-    pub fn save_at<P: Serialize + DeserializeOwned>(
-        &self,
-        target: &str,
-        payload: P,
-        preconditions: Vec<Precondition>,
-        now: u64,
-    ) -> Result<Plan<P>> {
+    pub fn save_at(&self, target: &str, payload: P, preconditions: Vec<Precondition>, now: u64) -> Result<Plan<P>> {
         let value = serde_json::to_value(&payload).expect("a plan payload serializes");
         let hash = content_hash(target, &value, &preconditions);
         std::fs::create_dir_all(&self.dir)
@@ -238,7 +254,7 @@ impl PlanStore {
 
     /// Reads a saved plan without claiming it, for a command line that finds
     /// the target from the plan. Checks its content hash, not its age.
-    pub fn peek<P: DeserializeOwned>(&self, plan_id: &str) -> Result<Plan<P>> {
+    pub fn peek(&self, plan_id: &str) -> Result<Plan<P>> {
         if !valid_plan_id(plan_id) {
             return Err(not_found(plan_id));
         }
@@ -285,7 +301,7 @@ impl PlanStore {
     ///
     /// Returns the plan, now removed from the store. The app then applies
     /// it through its normal write path and appends it to the journal.
-    pub fn take<P: DeserializeOwned>(
+    pub fn take(
         &self,
         write: &Authorized,
         plan_id: &str,
@@ -296,7 +312,7 @@ impl PlanStore {
         self.take_at(write, plan_id, target, record_sha256, verify, now_ms())
     }
 
-    pub fn take_at<P: DeserializeOwned>(
+    pub fn take_at(
         &self,
         _write: &Authorized,
         plan_id: &str,
@@ -380,7 +396,7 @@ mod tests {
         enable: String,
     }
 
-    fn setup() -> (TestDir, PlanStore, PathBuf, Authorized) {
+    fn setup() -> (TestDir, PlanStore<Change>, PathBuf, Authorized) {
         let tmp = TestDir::new("plan");
         let store = PlanStore::new(tmp.0.join("plans"), 1);
         let file = tmp.0.join("config.json");
@@ -389,7 +405,7 @@ mod tests {
         (tmp, store, file, cli)
     }
 
-    fn plan_on(store: &PlanStore, file: &Path) -> Plan<Change> {
+    fn plan_on(store: &PlanStore<Change>, file: &Path) -> Plan<Change> {
         store.save("target-a", Change { enable: "b".into() }, vec![Precondition::file(file).unwrap()]).unwrap()
     }
 
@@ -400,7 +416,7 @@ mod tests {
         assert!(valid_plan_id(&plan.plan_id));
         let taken: Plan<Change> = store.take(&cli, &plan.plan_id, "target-a", files_only, |_| Ok(())).unwrap();
         assert_eq!(taken.payload, Change { enable: "b".into() });
-        let again = store.take::<Change>(&cli, &plan.plan_id, "target-a", files_only, |_| Ok(()));
+        let again = store.take(&cli, &plan.plan_id, "target-a", files_only, |_| Ok(()));
         assert_eq!(again.unwrap_err().code, codes::PLAN_NOT_FOUND);
         assert_eq!(std::fs::read_dir(store.dir()).unwrap().count(), 0);
     }
@@ -410,7 +426,7 @@ mod tests {
         let (_tmp, store, file, cli) = setup();
         let plan = plan_on(&store, &file);
         std::fs::write(&file, "{\"x\":1}").unwrap();
-        let r = store.take::<Change>(&cli, &plan.plan_id, "target-a", files_only, |_| Ok(()));
+        let r = store.take(&cli, &plan.plan_id, "target-a", files_only, |_| Ok(()));
         assert_eq!(r.unwrap_err().code, codes::CHANGED_MEANWHILE);
         assert!(store.path(&plan.plan_id).exists());
 
@@ -418,15 +434,12 @@ mod tests {
             store.save("t", Change { enable: "c".into() }, vec![Precondition::record("row:7", Some(b"v1"))]).unwrap();
         let same = |_: &str| Ok(Some(sha256_hex(b"v1")));
         let moved = |_: &str| Ok(Some(sha256_hex(b"v2")));
+        assert_eq!(store.take(&cli, &rec.plan_id, "t", moved, |_| Ok(())).unwrap_err().code, codes::CHANGED_MEANWHILE);
         assert_eq!(
-            store.take::<Change>(&cli, &rec.plan_id, "t", moved, |_| Ok(())).unwrap_err().code,
-            codes::CHANGED_MEANWHILE
-        );
-        assert_eq!(
-            store.take::<Change>(&cli, &rec.plan_id, "t", files_only, |_| Ok(())).unwrap_err().code,
+            store.take(&cli, &rec.plan_id, "t", files_only, |_| Ok(())).unwrap_err().code,
             codes::STORE_UNREADABLE
         );
-        assert!(store.take::<Change>(&cli, &rec.plan_id, "t", same, |_| Ok(())).is_ok());
+        assert!(store.take(&cli, &rec.plan_id, "t", same, |_| Ok(())).is_ok());
     }
 
     #[test]
@@ -445,11 +458,11 @@ mod tests {
     fn expired_edited_other_target_and_bad_ids_are_refused() {
         let (_tmp, store, file, cli) = setup();
         let plan = plan_on(&store, &file);
-        let other = store.take::<Change>(&cli, &plan.plan_id, "target-b", files_only, |_| Ok(()));
+        let other = store.take(&cli, &plan.plan_id, "target-b", files_only, |_| Ok(()));
         assert_eq!(other.unwrap_err().code, codes::PLAN_OTHER_TARGET);
 
         let late = plan.expires_at_ms + 1;
-        let expired = store.take_at::<Change>(&cli, &plan.plan_id, "target-a", files_only, |_| Ok(()), late);
+        let expired = store.take_at(&cli, &plan.plan_id, "target-a", files_only, |_| Ok(()), late);
         assert_eq!(expired.unwrap_err().code, codes::PLAN_EXPIRED);
         assert!(!store.path(&plan.plan_id).exists(), "an expired plan is deleted");
 
@@ -457,12 +470,12 @@ mod tests {
         let path = store.path(&edited.plan_id);
         let text = std::fs::read_to_string(&path).unwrap().replace("\"b\"", "\"z\"");
         std::fs::write(&path, text).unwrap();
-        let r = store.take::<Change>(&cli, &edited.plan_id, "target-a", files_only, |_| Ok(()));
+        let r = store.take(&cli, &edited.plan_id, "target-a", files_only, |_| Ok(()));
         assert_eq!(r.unwrap_err().code, codes::CHANGED_MEANWHILE);
 
         for id in ["../config", "0123456789ABCDEF", "", "0123456789abcdef0"] {
             assert_eq!(
-                store.take::<Change>(&cli, id, "target-a", files_only, |_| Ok(())).unwrap_err().code,
+                store.take(&cli, id, "target-a", files_only, |_| Ok(())).unwrap_err().code,
                 codes::PLAN_NOT_FOUND,
                 "{id}"
             );

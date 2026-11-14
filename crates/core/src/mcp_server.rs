@@ -130,31 +130,9 @@ impl ServerHandler for KeeplightServer {
     }
 }
 
-/// The one async runtime in Keeplight: a single thread, with timers.
-fn runtime() -> Result<tokio::runtime::Runtime, String> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()
-        .map_err(|e| format!("Couldn't start the MCP server: {e}"))
-}
-
 /// Serves MCP on stdin and stdout until the client disconnects.
-///
-/// This is the kit's `mcp::serve_stdio` with timers turned on. The kit's
-/// version (KIT_VERSION 1) builds its runtime without them, and rmcp uses a
-/// timer when the client disconnects, so every session ended in a panic;
-/// the kit's own tests miss it because `#[tokio::test]` turns timers on.
-/// Reported to jamarq-agent-kit; go back to `mcp::serve_stdio` once the kit
-/// is fixed and copied again.
 pub fn serve(engine: Engine) -> Result<(), String> {
-    use rmcp::ServiceExt;
-    runtime()?.block_on(async {
-        let service = KeeplightServer::new(engine)
-            .serve(rmcp::transport::stdio())
-            .await
-            .map_err(|e| format!("The MCP client didn't connect: {e}"))?;
-        service.waiting().await.map(|_| ()).map_err(|e| format!("The MCP server stopped: {e}"))
-    })
+    mcp::serve_stdio(KeeplightServer::new(engine))
 }
 
 #[cfg(test)]
@@ -182,22 +160,23 @@ mod tests {
         serde_json::from_str::<serde_json::Value>(&text).unwrap()["error"]["code"].as_str().unwrap().to_string()
     }
 
-    /// A client disconnecting ends the session cleanly on the runtime `serve`
-    /// uses. Not a `#[tokio::test]`, which turns timers on by itself and hid
-    /// the kit's missing `enable_time`.
+    /// A client disconnecting ends the session cleanly on the kit's own
+    /// runtime (`mcp::serve_on`, which `serve_stdio` is). Not a
+    /// `#[tokio::test]`, which turns timers on by itself and hid the missing
+    /// timers in kit 1 (Keeplight's pilot, #16).
     #[test]
     fn a_client_disconnecting_ends_the_session_cleanly() {
         let data = std::env::temp_dir().join(format!("keeplight-mcp-end-{}", std::process::id()));
         let engine = Engine::new(Paths { data: data.clone() }, "127.0.0.1:9");
-        runtime().unwrap().block_on(async {
-            let (server_io, client_io) = tokio::io::duplex(64 * 1024);
-            let server = tokio::spawn(async move {
-                KeeplightServer::new(engine).serve(server_io).await.unwrap().waiting().await.map(|_| ())
-            });
+        let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+        let server = std::thread::spawn(move || mcp::serve_on(KeeplightServer::new(engine), server_io));
+        let client = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        client.block_on(async {
             let client = ().serve(client_io).await.unwrap();
             client.cancel().await.unwrap();
-            assert!(server.await.is_ok(), "the server task ended without panicking");
         });
+        let served = server.join().expect("the server thread ended without panicking");
+        assert!(served.is_ok(), "{served:?}");
         let _ = std::fs::remove_dir_all(&data);
     }
 

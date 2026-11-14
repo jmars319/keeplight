@@ -73,6 +73,7 @@ pub fn run() -> i32 {
     // The shared event log (logs/keeplight-*.jsonl), beside keeper.log, so
     // `get_logs` and `diagnose` show the keeper's runs too.
     let events = keeplight_core::agent::Engine::new(keeplight_core::paths::Paths::from_env(), address.clone());
+    let caller = keeplight_core::agent_kit::gate::Caller::Background { name: "keeper".into() };
     keeper::run(&address, &setup_path, &rx, timing, |why, result| {
         // Nothing kept and nothing wrong: nothing worth a log line.
         if !matches!(result, Ok(run) if run.reports.is_empty()) {
@@ -82,7 +83,7 @@ pub fn run() -> i32 {
             let level = if problems.is_empty() { LogLevel::Info } else { LogLevel::Warn };
             let summary = lines[0].split_once("  ").map_or(lines[0].as_str(), |(_, rest)| rest);
             let message = std::iter::once(summary.to_string()).chain(problems).collect::<Vec<_>>().join(" ");
-            events.log_as(level, "keeper.put_back", "keeper", None, None, &message, None);
+            events.log(level, "keeper.put_back", &caller, None, None, &message, None);
         }
         // Tell you once when something didn't hold, not on every wake after.
         if let (Some(tray), Some(notice)) = (&tray, notices.next(keeper::problems(result))) {

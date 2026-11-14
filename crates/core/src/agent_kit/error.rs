@@ -149,6 +149,12 @@ pub mod codes {
         Exit::Unexpected,
     );
 
+    /// The kit's codes followed by the app's own: an app's full list, which
+    /// keeps working when the kit adds a code.
+    pub fn with(app: &[ErrorCode]) -> Vec<ErrorCode> {
+        ALL.iter().chain(app).copied().collect()
+    }
+
     /// Every kit code, for an app's full list.
     pub const ALL: [ErrorCode; 10] = [
         USAGE,
@@ -320,6 +326,11 @@ mod tests {
         let plain = serde_json::to_value(AgentError::new(codes::IO, "disk full").report(1)).unwrap();
         assert!(plain["error"].get("details").is_none());
         assert_eq!(AgentError::new(codes::IO, "disk full").to_string(), "disk full");
+        const MINE: ErrorCode = ErrorCode::new("thing.missing", "m", "h", false, Exit::Refused);
+        let all = codes::with(&[MINE]);
+        assert_eq!(all.len(), codes::ALL.len() + 1);
+        assert_eq!(all.last(), Some(&MINE));
+        check_codes(&all).unwrap();
         let list = ErrorCodeList::of(1, &codes::ALL);
         assert_eq!(list.codes.len(), codes::ALL.len());
         assert_eq!(codes::USAGE.exit_code(), 2);

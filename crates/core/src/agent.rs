@@ -87,28 +87,17 @@ pub mod codes {
     );
 }
 
-/// Every code Keeplight can return: the kit's ten and its own six.
-pub const ALL_CODES: [ErrorCode; 16] = {
-    let k = kit::ALL;
-    [
-        k[0],
-        k[1],
-        k[2],
-        k[3],
-        k[4],
-        k[5],
-        k[6],
-        k[7],
-        k[8],
-        k[9],
+/// Every code Keeplight can return: the kit's, then its own.
+pub static ALL_CODES: std::sync::LazyLock<Vec<ErrorCode>> = std::sync::LazyLock::new(|| {
+    kit::with(&[
         codes::DEVICE_NOT_FOUND,
         codes::DEVICE_NOT_KEPT,
         codes::NOTHING_BEFORE,
         codes::CANT_KEEP,
         codes::CANT_COLOR,
         codes::OPENRGB_UNREACHABLE,
-    ]
-};
+    ])
+});
 
 /// What a change does to one device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -502,7 +491,7 @@ impl Engine {
         Setup::load(&self.paths.setup()).map_err(from_setup)
     }
 
-    fn plans(&self) -> PlanStore {
+    fn plans(&self) -> PlanStore<ChangePlan> {
         PlanStore::new(self.paths.plans(), SCHEMA_VERSION)
     }
 
@@ -519,27 +508,11 @@ impl Engine {
         message: &str,
         error: Option<&AgentError>,
     ) {
-        self.log_as(level, event, &caller.label(), subject, plan, message, error);
-    }
-
-    /// [`Engine::log`] with a caller label of the app's own beyond the kit's
-    /// `gui`, `cli` and `mcp:<client>`: `keeper` for the background keeper.
-    #[allow(clippy::too_many_arguments)]
-    pub fn log_as(
-        &self,
-        level: LogLevel,
-        event: &str,
-        caller: &str,
-        subject: Option<&str>,
-        plan: Option<&str>,
-        message: &str,
-        error: Option<&AgentError>,
-    ) {
         let _ = self.events.append(&LogEvent {
             ts_ms: now_ms(),
             level,
             event: event.into(),
-            caller: caller.into(),
+            caller: caller.label(),
             target: Some(TARGET.into()),
             subject: subject.map(str::to_string),
             plan: plan.map(str::to_string),
@@ -664,8 +637,7 @@ impl Engine {
                 Ok(again)
             };
             let plan: Plan<ChangePlan> =
-                self.plans()
-                    .take(&write, plan_id, TARGET, record, |p: &Plan<ChangePlan>| recheck(&p.payload).map(|_| ()))?;
+                self.plans().take(&write, plan_id, TARGET, record, |p| recheck(&p.payload).map(|_| ()))?;
             let checked = recheck(&plan.payload)?;
             let mut applied = self.perform(&lock, &write, &plan.payload.change, &checked)?;
             drop(lock);
