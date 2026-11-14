@@ -15,9 +15,12 @@
 //! - [`events`]: the JSON Lines event log, a file per day, kept 14 days.
 //! - [`diagnose`]: redaction for the `diagnose` bundle.
 //! - [`mcp`]: helpers for a stdio MCP server built on `rmcp`.
+//! - [`connect`]: finding Claude Code, Gemini CLI and Codex CLI, and the
+//!   commands for a Connect button in Settings.
 
 #![allow(dead_code)]
 
+pub mod connect;
 pub mod diagnose;
 pub mod error;
 pub mod events;
@@ -33,7 +36,7 @@ use sha2::{Digest, Sha256};
 
 /// The kit's version. Raised with every change to this folder, so a copy's
 /// version says which reference it came from.
-pub const KIT_VERSION: &str = "3";
+pub const KIT_VERSION: &str = "7";
 
 /// Milliseconds since 1970 (UTC).
 pub fn now_ms() -> u64 {

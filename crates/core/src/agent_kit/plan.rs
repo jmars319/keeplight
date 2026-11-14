@@ -401,7 +401,7 @@ mod tests {
         let store = PlanStore::new(tmp.0.join("plans"), 1);
         let file = tmp.0.join("config.json");
         std::fs::write(&file, "{}").unwrap();
-        let cli = authorize_write(&Caller::Cli, false, None).unwrap();
+        let cli = authorize_write(&Caller::Window, false, None).unwrap();
         (tmp, store, file, cli)
     }
 

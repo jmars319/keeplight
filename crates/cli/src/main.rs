@@ -13,10 +13,10 @@ use keeplight_core::agent_kit::gate::Caller;
 const USAGE: &str = "\
 keeplight-cli devices                    every device, and how it stands against what is kept
 keeplight-cli plan <action> <device>     check a change and save it as a plan; changes nothing else
-keeplight-cli apply <plan id> --yes      apply a saved plan once
-keeplight-cli <action> <device> --yes    plan and apply a change at once
-keeplight-cli set-color <device> <color> [--zone <zone>] --yes   set a device, or one zone, to #rrggbb and keep it (also with plan)
-keeplight-cli set-color all <color> --yes   every device that can take it, each planned, kept and journaled
+keeplight-cli apply <plan id> --yes --request <words>   apply a saved plan once
+keeplight-cli <action> <device> --yes --request <words>   plan and apply a change at once
+keeplight-cli set-color <device> <color> [--zone <zone>] --yes --request <words>   set a device, or one zone, to #rrggbb and keep it (also with plan)
+keeplight-cli set-color all <color> --yes --request <words>   every device that can take it, each planned, kept and journaled
 keeplight-cli logs [--limit N]           the newest events
 keeplight-cli diagnose                   everything for working out a problem, redacted (JSON)
 keeplight-cli error-codes                every error code
@@ -25,6 +25,10 @@ keeplight-cli mcp                        an MCP server on stdin and stdout (docs
 <action> is keep, keep-dark, put-back, stop-keeping, keep-as-before or set-color.
 <device> is an id or name from `devices`, such as ram-stick-1.
 --json prints one JSON object (the result, or an error report) instead of text.
+Every change needs --yes, --request <what was asked for, in your words>, and
+Let AI tools make changes turned on in Keeplight's window: an AI tool with a
+shell can run this command line, so it is gated like one. Reading and planning
+need neither.
 Exit codes: 0 ok, 2 bad usage, 3 refused, 4 changed meanwhile, 5 busy, 6 failed, 10 unexpected.";
 
 /// One parsed command line.
@@ -47,6 +51,9 @@ struct Args {
     command: Command,
     json: bool,
     yes: bool,
+    /// What the person asked for, in their words: every change needs it, and
+    /// it goes into the journal.
+    request: Option<String>,
 }
 
 fn usage(message: impl Into<String>) -> AgentError {
@@ -82,6 +89,7 @@ fn parse(raw: &[String]) -> Result<Args, AgentError> {
     let mut words: Vec<String> = Vec::new();
     let mut limit = 50;
     let mut zone: Option<String> = None;
+    let mut request: Option<String> = None;
     let mut i = 0;
     while i < raw.len() {
         match raw[i].as_str() {
@@ -89,6 +97,11 @@ fn parse(raw: &[String]) -> Result<Args, AgentError> {
             "--limit" => {
                 i += 1;
                 limit = raw.get(i).and_then(|n| n.parse().ok()).ok_or_else(|| usage("--limit needs a number."))?;
+            }
+            "--request" => {
+                i += 1;
+                request =
+                    Some(raw.get(i).cloned().ok_or_else(|| usage("--request needs the words of what was asked for."))?);
             }
             "--zone" => {
                 i += 1;
@@ -121,7 +134,7 @@ fn parse(raw: &[String]) -> Result<Args, AgentError> {
     if changes && !yes {
         return Err(usage("This changes your lights or what Keeplight keeps: add --yes. `plan` shows it first."));
     }
-    Ok(Args { command, json, yes })
+    Ok(Args { command, json, yes, request })
 }
 
 /// Prints `value` as JSON, or `text` for people.
@@ -195,14 +208,18 @@ fn run(args: &Args) -> Result<(), AgentError> {
             });
         }
         Command::Apply(id) => {
-            let a = Engine::from_env().apply(&Caller::Cli, id, None)?;
+            let a = Engine::from_env().apply(&Caller::Cli, id, args.request.as_deref())?;
             print(json, &a, || a.result.clone());
         }
         Command::Change(c) if c.action == Action::SetColor && c.device.eq_ignore_ascii_case("all") => {
             if c.zone.is_some() {
                 return Err(usage("--zone names one device's zone, so it doesn't go with all."));
             }
-            let r = Engine::from_env().set_everything(&Caller::Cli, c.color.as_deref().unwrap_or_default())?;
+            let r = Engine::from_env().set_everything(
+                &Caller::Cli,
+                c.color.as_deref().unwrap_or_default(),
+                args.request.as_deref(),
+            )?;
             print(json, &r, || {
                 let mut lines = vec![format!("Set {} of {} devices to {}.", r.set(), r.devices.len(), r.color)];
                 lines.extend(r.devices.iter().filter_map(|d| d.problem.as_ref().map(|p| format!("{}: {p}", d.name))));
@@ -219,7 +236,7 @@ fn run(args: &Args) -> Result<(), AgentError> {
             // Planned, then applied, so the change is journaled like any plan.
             let engine = Engine::from_env();
             let p = engine.plan(&Caller::Cli, c.clone())?;
-            let a = engine.apply(&Caller::Cli, &p.plan_id, None)?;
+            let a = engine.apply(&Caller::Cli, &p.plan_id, args.request.as_deref())?;
             print(json, &a, || a.result.clone());
         }
         Command::Logs(limit) => {
@@ -279,7 +296,10 @@ mod tests {
     fn commands_parse() {
         assert_eq!(args("").unwrap().command, Command::Help);
         assert_eq!(args("--version").unwrap().command, Command::Version);
-        assert_eq!(args("devices --json").unwrap(), Args { command: Command::Devices, json: true, yes: false });
+        assert_eq!(
+            args("devices --json").unwrap(),
+            Args { command: Command::Devices, json: true, yes: false, request: None }
+        );
         assert_eq!(
             args("plan put-back ram-stick-1").unwrap().command,
             Command::Plan(Change::new(Action::PutBack, "ram-stick-1"))
@@ -301,7 +321,7 @@ mod tests {
             args("set-color motherboard #00ff00 --zone addressable-rgb-header-1 --yes").unwrap().command,
             Command::Change(Change::set_color("motherboard", "#00ff00").in_zone("addressable-rgb-header-1"))
         );
-        assert_eq!(args("logs --limit 5").unwrap().command, Command::Logs(5));
+        assert_eq!(args("keep keyboard --yes --request x").unwrap().request.as_deref(), Some("x"));
         assert_eq!(args("logs --limit 9999").unwrap().command, Command::Logs(500));
         assert_eq!(args("mcp").unwrap().command, Command::Mcp);
     }

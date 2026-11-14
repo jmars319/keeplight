@@ -320,7 +320,7 @@ fn run_command(command: &Command, engine: &Engine) -> view::Notice {
         Command::StopKeeping(row) => device_change(engine, Action::StopKeeping, row),
         Command::KeepAsBefore(row) => device_change(engine, Action::KeepAsBefore, row),
         Command::Install(key) => install(key),
-        Command::SetEverything(color) => match engine.set_everything(&Caller::Window, color) {
+        Command::SetEverything(color) => match engine.set_everything(&Caller::Window, color, None) {
             Ok(r) => {
                 let mut text = format!("Set {} of {} devices to {} and kept them.", r.set(), r.devices.len(), r.color);
                 for d in r.devices.iter().filter(|d| d.problem.is_some()) {
