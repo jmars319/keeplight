@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DevicesReport",
+  "description": "The `get_devices` result.",
+  "type": "object",
+  "properties": {
+    "aiChanges": {
+      "description": "Whether AI tools may make changes (Settings, off by default).",
+      "type": "boolean"
+    },
+    "devices": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DeviceReport"
+      }
+    },
+    "openrgbProtocol": {
+      "description": "OpenRGB's own protocol version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "openrgbProtocol",
+    "devices",
+    "aiChanges"
+  ],
+  "$defs": {
+    "DeviceReport": {
+      "description": "One device, as get_devices and `keeplight-cli devices` report it.",
+      "type": "object",
+      "properties": {
+        "canStoreColor": {
+          "description": "It can store a color itself; when false it resets on any power loss.",
+          "type": "boolean"
+        },
+        "color": {
+          "description": "The color most of its lights show, as #rrggbb; none when every light\nis off or it runs a mode of its own.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dark": {
+          "description": "Every light reads as off.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Use this, or the name, in a change.",
+          "type": "string"
+        },
+        "kept": {
+          "$ref": "#/$defs/KeptState"
+        },
+        "keptAs": {
+          "description": "What Keeplight keeps for it, such as \"Chase Fade in #ff0000\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keptBefore": {
+          "description": "What it was kept as before you stopped keeping it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "lights": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "litBy": {
+          "description": "What probably lights it now, in plain words. A guess where it says\n\"probably\".",
+          "type": "string"
+        },
+        "location": {
+          "description": "Where OpenRGB found it.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "The mode it's in now.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "What a person calls it, such as \"RAM stick 1\".",
+          "type": "string"
+        },
+        "ownLighting": {
+          "description": "It runs a lighting mode of its own (Onboard, a built-in effect), so its\ncolors are unknown to OpenRGB.",
+          "type": "boolean"
+        },
+        "product": {
+          "description": "The product name OpenRGB reports.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "product",
+        "kind",
+        "location",
+        "lights",
+        "dark",
+        "ownLighting",
+        "canStoreColor",
+        "kept",
+        "litBy"
+      ]
+    },
+    "KeptState": {
+      "description": "How a device stands against what Keeplight keeps.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "notKept"
+          ]
+        },
+        {
+          "description": "Showing what was kept, as far as OpenRGB's record says.",
+          "type": "string",
+          "const": "kept"
+        },
+        {
+          "description": "Showing something else: putting it back can fix that.",
+          "type": "string",
+          "const": "differs"
+        },
+        {
+          "description": "Kept, but the device changed (light count, modes) so the setup no\nlonger fits; it is skipped until kept again.",
+          "type": "string",
+          "const": "changed"
+        }
+      ]
+    }
+  }
+}

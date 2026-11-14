@@ -23,7 +23,9 @@ serde_json.workspace = true
 sha2 = "0.11"
 schemars = "1"
 rmcp = { version = "3.10", default-features = false, features = ["server", "macros", "transport-io"] }
-tokio = { version = "1", default-features = false, features = ["rt", "macros", "io-std", "sync"] }
+# "time" beyond the kit's list: see mcp_server::serve. rmcp already uses
+# tokio's timers, so it adds no crate.
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "io-std", "sync", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp"] }

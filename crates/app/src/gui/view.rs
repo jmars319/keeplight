@@ -33,6 +33,8 @@ pub struct View {
     pub last_run: String,
     /// Whether the keeper shows its icon in the notification area.
     pub tray_icon: bool,
+    /// "Let AI tools make changes".
+    pub ai_changes: bool,
 }
 
 /// The sign-in switch's state and sentence. `current` is the registered
@@ -182,6 +184,7 @@ pub fn build(
         sign_in_note: String::new(),
         last_run: String::new(),
         tray_icon: false,
+        ai_changes: false,
     }
 }
 
@@ -300,6 +303,7 @@ fn message(chip: &str, heading: &str, message: &str) -> View {
         sign_in_note: String::new(),
         last_run: String::new(),
         tray_icon: false,
+        ai_changes: false,
     }
 }
 

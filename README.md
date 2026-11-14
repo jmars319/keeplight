@@ -29,6 +29,10 @@ Early development, nothing released yet. Stage 02, the keeper, is being built:
 
 Stage 02 is complete with these. Setting colors in Keeplight itself comes in stage 03. See the plan page.
 
+## AI tools and the command line
+
+`keeplight-cli.exe`, installed beside the app, is Keeplight's command line (`keeplight-cli devices`, `plan`, `apply`, `keep`, `put-back`, `stop-keeping`, `keep-as-before`, `logs`, `diagnose`, `error-codes`, with `--json`) and its MCP server for AI apps such as Claude Code, Gemini CLI and Codex CLI (`keeplight-cli mcp`). AI tools can read and plan; they change nothing unless you turn on "Let AI tools make changes" in the window, and then only what you ask for, planned first and journaled. See [docs/ai.md](docs/ai.md).
+
 ## Build from source
 
 You need the Rust toolchain (stable, MSVC), Visual Studio Build Tools, and OpenRGB running with its SDK server on (the OpenRGB service has it on).
@@ -40,7 +44,7 @@ cargo run -p keeplight
 
 Set `KEEPLIGHT_OPENRGB` to another `host:port` to point Keeplight at a different SDK server, such as a test one, and `KEEPLIGHT_DATA` to another folder for the setup file and log.
 
-`cargo run -p keeplight-core --features testing --example fake-openrgb` starts a fake SDK server with two RAM sticks and a keyboard and prints its address. `scripts/smoke-mouse-clicks.ps1` clicks the real window's buttons against it (CI runs it too).
+`cargo run -p keeplight-cli -- devices` runs the command line from source. `cargo run -p keeplight-core --features testing --example fake-openrgb` starts a fake SDK server with two RAM sticks and a keyboard and prints its address. `scripts/smoke-mouse-clicks.ps1` clicks the real window's buttons against it (CI runs it too).
 
 `scripts/package.ps1` builds the portable zip and, when Inno Setup 6 is installed, the per-user installer into `dist/`. `scripts/generate-icon.ps1` redraws the icon in `assets/`.
 

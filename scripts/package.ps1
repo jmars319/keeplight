@@ -14,13 +14,15 @@ $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).pack
     Where-Object name -eq 'keeplight' | Select-Object -ExpandProperty version
 
 if (-not $SkipBuild) {
-    cargo build --release --locked -p keeplight
+    cargo build --release --locked -p keeplight -p keeplight-cli
     if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 }
 
 if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
 New-Item -ItemType Directory -Force $staging | Out-Null
 Copy-Item (Join-Path $root 'target\release\keeplight.exe') $staging
+# The command line and MCP server (docs/ai.md), a console program beside the window.
+Copy-Item (Join-Path $root 'target\release\keeplight-cli.exe') $staging
 Copy-Item (Join-Path $root 'LICENSE') (Join-Path $staging 'LICENSE.txt')
 Copy-Item (Join-Path $root 'README.md') $staging
 
@@ -63,7 +65,7 @@ Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zip
 # Verify the archive holds exactly what is expected and nothing private.
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $entries = [System.IO.Compression.ZipFile]::OpenRead($zip).Entries | ForEach-Object FullName
-$expected = 'LICENSE.txt', 'README.md', 'THIRD-PARTY-LICENSES.txt', 'keeplight.exe'
+$expected = 'LICENSE.txt', 'README.md', 'THIRD-PARTY-LICENSES.txt', 'keeplight-cli.exe', 'keeplight.exe'
 if (Compare-Object ($entries | Sort-Object) ($expected | Sort-Object)) {
     throw "Unexpected zip contents: $($entries -join ', ')"
 }

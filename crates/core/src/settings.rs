@@ -13,6 +13,11 @@ pub struct Settings {
     /// Show the keeper's icon in the notification area. Off by default (owner
     /// decision 2026-11-13); failures are still told by a notification.
     pub tray_icon: bool,
+    /// "Let AI tools make changes": while off (the default), AI tools can
+    /// read and plan through the MCP server, but every change is refused
+    /// with `ai.changes_off`. Turned on only from the window's Settings.
+    #[serde(rename = "aiChanges")]
+    pub ai_changes: bool,
 }
 
 impl Settings {
@@ -42,11 +47,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("settings.json");
         assert_eq!(Settings::load(&path), Settings::default());
-        Settings { tray_icon: true }.save(&path).unwrap();
+        Settings { tray_icon: true, ai_changes: true }.save(&path).unwrap();
         assert!(Settings::load(&path).tray_icon);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"aiChanges\": true"), "the fleet's name");
         std::fs::write(&path, "{ nope").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());
         std::fs::write(&path, "{}").unwrap();
         assert!(!Settings::load(&path).tray_icon, "fields added later default sensibly");
+        assert!(!Settings::load(&path).ai_changes, "AI changes are off by default");
     }
 }

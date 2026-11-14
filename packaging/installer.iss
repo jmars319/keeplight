@@ -40,6 +40,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "{#SourceDir}\keeplight.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\keeplight-cli.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\THIRD-PARTY-LICENSES.txt"; DestDir: "{app}"; Flags: ignoreversion
@@ -55,6 +56,7 @@ Filename: "{app}\keeplight.exe"; Description: "Open Keeplight"; Flags: nowait po
 [UninstallRun]
 ; Stops a keeper that is still putting lights back, so its exe can be removed.
 Filename: "{sys}\taskkill.exe"; Parameters: "/f /im keeplight.exe"; Flags: runhidden; RunOnceId: "StopKeeplight"
+Filename: "{sys}\taskkill.exe"; Parameters: "/f /im keeplight-cli.exe"; Flags: runhidden; RunOnceId: "StopKeeplightCli"
 
 [Code]
 // The app's "Put kept lights back when you sign in" switch writes a per-user

@@ -9,6 +9,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use keeplight_core::agent_kit::events::LogLevel;
 use keeplight_core::keep::{ActionError, Outcome, Run};
 use keeplight_core::keeper::{self, Notices, Timing, Trigger};
 
@@ -69,10 +70,19 @@ pub fn run() -> i32 {
     }
     drop(tx);
 
+    // The shared event log (logs/keeplight-*.jsonl), beside keeper.log, so
+    // `get_logs` and `diagnose` show the keeper's runs too.
+    let events = keeplight_core::agent::Engine::new(keeplight_core::paths::Paths::from_env(), address.clone());
     keeper::run(&address, &setup_path, &rx, timing, |why, result| {
         // Nothing kept and nothing wrong: nothing worth a log line.
         if !matches!(result, Ok(run) if run.reports.is_empty()) {
-            let _ = crate::platform::append_log(&log_lines(&crate::platform::local_timestamp(), why, result));
+            let lines = log_lines(&crate::platform::local_timestamp(), why, result);
+            let _ = crate::platform::append_log(&lines);
+            let problems = keeper::problems(result);
+            let level = if problems.is_empty() { LogLevel::Info } else { LogLevel::Warn };
+            let summary = lines[0].split_once("  ").map_or(lines[0].as_str(), |(_, rest)| rest);
+            let message = std::iter::once(summary.to_string()).chain(problems).collect::<Vec<_>>().join(" ");
+            events.log_as(level, "keeper.put_back", "keeper", None, None, &message, None);
         }
         // Tell you once when something didn't hold, not on every wake after.
         if let (Some(tray), Some(notice)) = (&tray, notices.next(keeper::problems(result))) {

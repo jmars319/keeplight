@@ -172,6 +172,13 @@ try {
     Check 'switch: tray icon on is saved' (Eventually { Tray })
     Click "Show the keeper's icon in the notification area"
     Check 'switch: tray icon off is saved' (Eventually { -not (Tray) })
+    function AiChanges { (Test-Path $settings) -and [bool](Get-Content $settings -Raw | ConvertFrom-Json).aiChanges }
+    Check 'AI changes start off' (-not (AiChanges))
+    Click 'Let AI tools make changes'
+    Check 'switch: AI changes on is saved' (Eventually { AiChanges })
+    Click 'Let AI tools make changes'
+    Check 'switch: AI changes off is saved' (Eventually { -not (AiChanges) })
+    Check 'the connect lines name keeplight-cli' (Eventually { Has 'Command to connect an AI app: claude mcp add*keeplight-cli.exe" mcp' })
 } finally {
     Remove-ItemProperty -Path $run -Name $entry -ErrorAction SilentlyContinue
     if ($p -and -not $p.HasExited) { $p.Kill(); $p.WaitForExit() }
