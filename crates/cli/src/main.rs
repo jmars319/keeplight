@@ -16,6 +16,7 @@ keeplight-cli plan <action> <device>     check a change and save it as a plan; c
 keeplight-cli apply <plan id> --yes      apply a saved plan once
 keeplight-cli <action> <device> --yes    plan and apply a change at once
 keeplight-cli set-color <device> <color> [--zone <zone>] --yes   set a device, or one zone, to #rrggbb and keep it (also with plan)
+keeplight-cli set-color all <color> --yes   every device that can take it, each planned, kept and journaled
 keeplight-cli logs [--limit N]           the newest events
 keeplight-cli diagnose                   everything for working out a problem, redacted (JSON)
 keeplight-cli error-codes                every error code
@@ -196,6 +197,23 @@ fn run(args: &Args) -> Result<(), AgentError> {
         Command::Apply(id) => {
             let a = Engine::from_env().apply(&Caller::Cli, id, None)?;
             print(json, &a, || a.result.clone());
+        }
+        Command::Change(c) if c.action == Action::SetColor && c.device.eq_ignore_ascii_case("all") => {
+            if c.zone.is_some() {
+                return Err(usage("--zone names one device's zone, so it doesn't go with all."));
+            }
+            let r = Engine::from_env().set_everything(&Caller::Cli, c.color.as_deref().unwrap_or_default())?;
+            print(json, &r, || {
+                let mut lines = vec![format!("Set {} of {} devices to {}.", r.set(), r.devices.len(), r.color)];
+                lines.extend(r.devices.iter().filter_map(|d| d.problem.as_ref().map(|p| format!("{}: {p}", d.name))));
+                lines.join("\n")
+            });
+            if r.set() == 0 {
+                return Err(AgentError::new(
+                    keeplight_core::agent::codes::CANT_COLOR,
+                    "No device took that color, so nothing was changed.",
+                ));
+            }
         }
         Command::Change(c) => {
             // Planned, then applied, so the change is journaled like any plan.

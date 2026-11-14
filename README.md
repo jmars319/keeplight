@@ -28,11 +28,11 @@ Early development, nothing released yet. Stage 02, the keeper, is being built:
 - **Stop keeping** removes a device from the setup (remembering it for Keep it as before) and, if it's in Direct mode and has a built-in "Onboard" mode, hands it back to that, so it isn't left dark.
 - **Keep it dark…** on a device whose lights are all off asks once before keeping it that way.
 
-Stage 02 is complete with these. Stage 03 adds colors: per device and per zone so far, with one color for everything still to come. See the plan page.
+Stage 02 is complete with these. Stage 03 adds colors: per device, per zone, and one color for everything. See the plan page.
 
 ## AI tools and the command line
 
-`keeplight-cli.exe`, installed beside the app, is Keeplight's command line (`keeplight-cli devices`, `plan`, `apply`, `keep`, `put-back`, `stop-keeping`, `keep-as-before`, `set-color`, `logs`, `diagnose`, `error-codes`, with `--json`) and its MCP server for AI apps such as Claude Code, Gemini CLI and Codex CLI (`keeplight-cli mcp`). AI tools can read and plan; they change nothing unless you turn on "Let AI tools make changes" in the window, and then only what you ask for, planned first and journaled. See [docs/ai.md](docs/ai.md).
+`keeplight-cli.exe`, installed beside the app, is Keeplight's command line (`keeplight-cli devices`, `plan`, `apply`, `keep`, `put-back`, `stop-keeping`, `keep-as-before`, `set-color` (or `set-color all`), `logs`, `diagnose`, `error-codes`, with `--json`) and its MCP server for AI apps such as Claude Code, Gemini CLI and Codex CLI (`keeplight-cli mcp`). AI tools can read and plan; they change nothing unless you turn on "Let AI tools make changes" in the window, and then only what you ask for, planned first and journaled. See [docs/ai.md](docs/ai.md).
 
 ## Build from source
 

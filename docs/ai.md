@@ -38,7 +38,7 @@ A change is one action on one device:
 | `keepAsBefore` | Go back to the setup it had before the last `stopKeeping` or `setColor`, and send it that. On a kept device the two swap, so doing it again redoes the change. |
 | `setColor` | Set the device to `color` (`#rrggbb`) and keep it. A mode that takes colors keeps its effect in the new color (red Chase Fade becomes blue Chase Fade); a mode that doesn't, such as Onboard or a rainbow, switches to Static, or Direct. Black is refused: use `keepDark`. With `zone` (a zone id from `get_devices`, such as `addressable-rgb-header-1`), only that zone changes: the device stays in, or switches to, a mode that colors each light (Direct), and its other zones keep their kept colors. |
 
-For one color on the whole PC, plan a `setColor` for each device. Nothing an AI app can do is irreversible: every action can be undone by another, and a new color by `keepAsBefore`.
+For one color on the whole PC, plan a `setColor` for each device (on the command line, `keeplight-cli set-color all <color> --yes` does that, journaling each). Nothing an AI app can do is irreversible: every action can be undone by another, and a new color by `keepAsBefore`.
 
 Results are the same JSON as `keeplight-cli --json`, in the shapes under [`schema/`](../schema/). On failure a tool returns an error result (`isError`) holding an `ErrorReport`: a stable `code`, a `message`, a `hint` and whether retrying can work.
 

@@ -329,6 +329,35 @@ pub struct Applied {
     pub effect: Option<Effect>,
 }
 
+/// The result of one color for every device (`keeplight-cli set-color all`,
+/// or Set everything in the window).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Everything {
+    pub schema_version: u32,
+    pub color: String,
+    pub devices: Vec<DeviceResult>,
+}
+
+impl Everything {
+    /// How many devices took the color.
+    pub fn set(&self) -> usize {
+        self.devices.iter().filter(|d| d.applied.is_some()).count()
+    }
+}
+
+/// One device's part in [`Everything`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceResult {
+    pub device: String,
+    pub name: String,
+    /// What was done, when it took the color.
+    pub applied: Option<Applied>,
+    /// Why it was left as it is, when it didn't.
+    pub problem: Option<String>,
+}
+
 /// The state of one device, for a plan's record precondition: its mode with
 /// every setting, and its colors.
 fn device_state(d: &Device) -> Vec<u8> {
@@ -750,6 +779,42 @@ impl Engine {
         result
     }
 
+    /// One color for the whole PC: [`Engine::change_now`] with setColor on
+    /// every device, one at a time, each kept and each undoable with keep as
+    /// before. A device that can't take the color is left as it is and says
+    /// why. From the command line each device is planned and applied, so it
+    /// is journaled. AI tools plan one setColor per device instead, each with
+    /// the user's request.
+    pub fn set_everything(&self, caller: &Caller, color: &str) -> Result<Everything> {
+        let devices = self.snapshot()?.devices;
+        let names = display_names(&devices);
+        let results = devices
+            .iter()
+            .zip(names)
+            .map(|(d, name)| {
+                let change = Change::set_color(d.location.clone(), color);
+                // The window changes at once; the command line plans and applies,
+                // so each device is journaled.
+                let result = match caller {
+                    Caller::Window => self.change_now(caller, change),
+                    _ => self.plan(caller, change).and_then(|p| self.apply(caller, &p.plan_id, None)),
+                };
+                // A bad color is wrong for every device: stop at the first.
+                if let Err(e) = &result
+                    && e.code == kit::USAGE
+                {
+                    return Err(e.clone());
+                }
+                let (applied, problem) = match result {
+                    Ok(a) => (Some(a), None),
+                    Err(e) => (None, Some(e.message)),
+                };
+                Ok(DeviceResult { device: device_id(&name), name, applied, problem })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Everything { schema_version: SCHEMA_VERSION, color: color.trim().to_string(), devices: results })
+    }
+
     /// The one write path, after a check, under the setup lock the check was
     /// made under, for an authorized caller.
     fn perform(
@@ -1050,6 +1115,30 @@ mod tests {
     }
 
     #[test]
+    fn set_everything_colors_each_device_that_can_take_it() {
+        let d = data("everything");
+        let mut fixed = testing::ram("SMBus 0x73");
+        fixed.modes.retain(|m| m.name == "Rainbow");
+        fixed.active_mode = Some(0);
+        let server = FakeServer::start(vec![testing::ram("SMBus 0x71"), fixed, testing::board()]);
+        let e = engine(&server, &d);
+        let r = e.set_everything(&Caller::Cli, "#00ff40").unwrap();
+        assert_eq!((r.set(), r.devices.len()), (2, 3));
+        assert_eq!(r.devices[1].name, "RAM stick 2");
+        assert!(r.devices[1].problem.as_deref().unwrap().contains("none of its modes takes a color"));
+        let green = crate::device::Rgb { r: 0, g: 0xff, b: 0x40 };
+        assert_eq!(server.device(0).colors, vec![green; 8], "the effect stays, in green");
+        assert_eq!(server.device(2).active().unwrap().colors, vec![green]);
+        assert_eq!(Setup::load(&e.paths.setup()).unwrap().devices.len(), 2);
+        assert_eq!(journal::read(&d.0).len(), 2, "the command line journals each device");
+        // Undo is per device.
+        e.change_now(&Caller::Window, change(Action::KeepAsBefore, "motherboard")).unwrap();
+        assert_eq!(server.device(2).active().unwrap().colors, vec![RED]);
+        // A color that can't be read stops at once and changes nothing.
+        assert_eq!(e.set_everything(&Caller::Window, "green").unwrap_err().code, kit::USAGE);
+    }
+
+    #[test]
     fn set_color_needs_a_real_color() {
         let devices = [testing::ram("a")];
         let setup = Setup::default();
@@ -1119,6 +1208,7 @@ mod tests {
             ("change.schema.json", schemars::schema_for!(Change)),
             ("plan.schema.json", schemars::schema_for!(Plan<ChangePlan>)),
             ("applied.schema.json", schemars::schema_for!(Applied)),
+            ("everything.schema.json", schemars::schema_for!(Everything)),
             ("error-report.schema.json", schemars::schema_for!(ErrorReport)),
             ("error-codes.schema.json", schemars::schema_for!(ErrorCodeList)),
         ];
